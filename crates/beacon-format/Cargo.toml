@@ -1,0 +1,13 @@
+[package]
+name = "beacon-format"
+description = "The .beacon model format and GGUF importer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true

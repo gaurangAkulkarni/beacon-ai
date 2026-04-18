@@ -1,0 +1,5 @@
+# Lint configuration thresholds.
+# Lint enable/disable rules live in [workspace.lints] in Cargo.toml.
+cognitive-complexity-threshold = 30
+too-many-arguments-threshold = 8
+type-complexity-threshold = 250

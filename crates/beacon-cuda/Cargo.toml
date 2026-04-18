@@ -1,0 +1,18 @@
+[package]
+name = "beacon-cuda"
+description = "Beacon CUDA backend (tertiary, feature-gated)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[features]
+# CUDA is opt-in. Step 1 leaves the feature flag wired with no implementation.
+default = []
+cuda = []
+
+[lints]
+workspace = true

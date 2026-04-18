@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/beacon-core",
+    "crates/beacon-mlx",
+    "crates/beacon-kernels",
+    "crates/beacon-cuda",
+    "crates/beacon-format",
+    "crates/beacon-tokenizer",
+    "crates/beacon-scheduler",
+    "crates/beacon-arrow",
+    "crates/beacon-registry",
+    "crates/beacon-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/01KvellDynamics/beacon-ai"
+homepage = "https://github.com/01KvellDynamics/beacon-ai"
+authors = ["The Beacon Authors"]
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic opt-outs that are noisy or counterproductive for a library workspace.
+# Documented per CLAUDE.md: "clippy::pedantic with documented exceptions".
+module_name_repetitions = "allow"  # common in Rust for public re-exports
+missing_errors_doc = "allow"       # to be revisited once public APIs exist
+missing_panics_doc = "allow"       # to be revisited once public APIs exist
+must_use_candidate = "allow"       # noisy on stubs; revisit for public APIs
+
+[workspace.dependencies]
+beacon-core = { path = "crates/beacon-core", version = "0.1.0" }
+beacon-mlx = { path = "crates/beacon-mlx", version = "0.1.0" }
+beacon-kernels = { path = "crates/beacon-kernels", version = "0.1.0" }
+beacon-cuda = { path = "crates/beacon-cuda", version = "0.1.0" }
+beacon-format = { path = "crates/beacon-format", version = "0.1.0" }
+beacon-tokenizer = { path = "crates/beacon-tokenizer", version = "0.1.0" }
+beacon-scheduler = { path = "crates/beacon-scheduler", version = "0.1.0" }
+beacon-arrow = { path = "crates/beacon-arrow", version = "0.1.0" }
+beacon-registry = { path = "crates/beacon-registry", version = "0.1.0" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = 1
