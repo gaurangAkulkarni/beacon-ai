@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 9 — Scheduler (`beacon-scheduler` crate).**
+**Next up: Step 10 — CLI (`beacon-cli` crate).**
 
-Steps 1–8 complete and committed. All locally verified on macOS ARM64.
+Steps 1–9 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -372,14 +372,47 @@ Architecture reference: [§5 Backend Selection](architecture.md#5-backend-select
 
 ---
 
-### Steps 9 – 15 ⏳ not started
+### Step 9 — Scheduler ✅ complete
+
+Architecture reference: [§11 Scheduler](architecture.md#11-scheduler-beacon-scheduler).
+
+**Success criteria:**
+- [x] Sampling pipeline: repeat penalty → temperature → top-k → top-p →
+  min-p → multinomial (architecture §11.2 order)
+- [x] Streaming via `tokio::sync::mpsc` channel
+- [x] Stop conditions: stop tokens, max tokens
+- [ ] First token latency <100ms on M2 Pro (requires real model; deferred
+  to integration testing)
+
+**Delivered:**
+- `src/sampling.rs` — full sampling pipeline: `apply_repeat_penalty`,
+  `apply_temperature`, `apply_top_k`, `apply_top_p`, `apply_min_p`,
+  softmax, multinomial sample. Greedy argmax for T=0.
+- `src/params.rs` — `GenerationParams` (max_tokens, temperature, top_k,
+  top_p, min_p, repeat_penalty, stop_tokens). Default = greedy.
+- `src/generate.rs` — `generate_stream_sync` (blocking decode loop) and
+  `generate_stream` (async via `spawn_blocking`). `GeneratedToken` struct
+  with `token_id` and `is_last`.
+- `src/error.rs` — `SchedulerError` (Engine, Cancelled, MaxTokens, Timeout).
+- Dependencies: `thiserror`, `tokio` (sync, rt, macros, time), `rand`.
+- 9 tests: greedy, argmax, temperature, repeat penalty, top-k, defaults,
+  stop token, max tokens, position increment.
+
+**Local verification (macOS ARM64):**
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-scheduler --all-targets -- -D warnings` — clean
+- `cargo test -p beacon-scheduler` — 9/9 passed
+- `cargo build --workspace --all-targets` — clean
+
+---
+
+### Steps 10 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 9 | Scheduler | §11 | not started |
 | 10 | CLI | §12.3 | not started |
 | 11 | HTTP server | §12.4 | not started |
 | 12 | Python bindings | §12.1 | not started |

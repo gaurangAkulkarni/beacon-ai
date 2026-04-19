@@ -11,3 +11,8 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+rand = "0.9"
