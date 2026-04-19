@@ -292,6 +292,7 @@ fn generate(
     }
 
     // Auto-regressive decode loop.
+    #[allow(clippy::explicit_counter_loop)]
     for _ in 1..max_tokens {
         let logits = engine
             .forward(&[next_token], position)
