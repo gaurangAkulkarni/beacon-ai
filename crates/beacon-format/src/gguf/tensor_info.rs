@@ -37,12 +37,15 @@ pub fn parse_tensor_infos(
         let ndim = read_u32(data, pos)? as usize;
         pos += 4;
 
-        // dims: u64 * ndim
+        // dims: u64 * ndim — GGUF stores as [ne0, ne1, ...] where ne0 is the
+        // innermost (column) dimension. Reverse to get standard row-major
+        // [rows, cols, ...] order for C/Rust/MLX.
         let mut shape = Vec::with_capacity(ndim);
         for _ in 0..ndim {
             shape.push(read_u64(data, pos)?);
             pos += 8;
         }
+        shape.reverse();
 
         // GGUF type: u32
         let gguf_type_id = read_u32(data, pos)?;

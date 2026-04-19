@@ -199,10 +199,13 @@ int32_t beacon_op_attention(
         return BEACON_ERR_UNKNOWN;
 #else
         std::optional<mlx::core::array> mask_arr;
-        std::string mask_mode;  // "" → no mask (or use provided mask_arr)
+        std::string mask_mode;
         if (mask != nullptr) {
             mask_arr = mask->arr;
             mask_mode = "array";
+        } else if (q->arr.shape(-2) > 1) {
+            // Auto-enable causal masking for multi-token sequences (prefill).
+            mask_mode = "causal";
         }
         auto result = mlx::core::fast::scaled_dot_product_attention(
             q->arr,

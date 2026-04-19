@@ -12,12 +12,19 @@ use beacon_mlx::{Dtype, MlxContext, MlxTensor};
 use crate::error::EngineError;
 
 /// Attention projection weights for a single transformer layer.
+///
+/// The optional `q_bias`, `k_bias`, `v_bias` fields support models that have
+/// biases on the QKV projections (e.g. Qwen2). Models without biases (e.g.
+/// `LLaMA`) leave these as `None`.
 #[derive(Debug)]
 pub struct AttentionWeights<T> {
     pub q_proj: T,
     pub k_proj: T,
     pub v_proj: T,
     pub o_proj: T,
+    pub q_bias: Option<T>,
+    pub k_bias: Option<T>,
+    pub v_bias: Option<T>,
 }
 
 /// FFN (feed-forward network) weights for a single transformer layer.
@@ -113,6 +120,9 @@ fn hf_to_gguf_name(hf_name: &str) -> String {
                 "self_attn.k_proj.weight" => "attn_k.weight",
                 "self_attn.v_proj.weight" => "attn_v.weight",
                 "self_attn.o_proj.weight" => "attn_output.weight",
+                "self_attn.q_proj.bias" => "attn_q.bias",
+                "self_attn.k_proj.bias" => "attn_k.bias",
+                "self_attn.v_proj.bias" => "attn_v.bias",
                 "mlp.gate_proj.weight" => "ffn_gate.weight",
                 "mlp.up_proj.weight" => "ffn_up.weight",
                 "mlp.down_proj.weight" => "ffn_down.weight",
@@ -195,6 +205,22 @@ fn load_named(
     load_tensor(beacon, meta, ctx)
 }
 
+/// Try to load a named tensor, returning `None` if the tensor does not exist.
+///
+/// This is used for optional weights like QKV biases that are present in some
+/// model families (Qwen2) but not others (`LLaMA`).
+fn try_load_named(
+    beacon: &BeaconFile,
+    name: &str,
+    ctx: &Arc<MlxContext>,
+) -> Result<Option<MlxTensor>, EngineError> {
+    match find_tensor(beacon, name) {
+        Ok(meta) => Ok(Some(load_tensor(beacon, meta, ctx)?)),
+        Err(EngineError::WeightNotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Load all model weights from a `.beacon` file.
 ///
 /// Tensor names follow `HuggingFace` conventions:
@@ -221,6 +247,9 @@ pub fn load_weights(
             k_proj: load_named(beacon, &format!("{prefix}.self_attn.k_proj.weight"), ctx)?,
             v_proj: load_named(beacon, &format!("{prefix}.self_attn.v_proj.weight"), ctx)?,
             o_proj: load_named(beacon, &format!("{prefix}.self_attn.o_proj.weight"), ctx)?,
+            q_bias: try_load_named(beacon, &format!("{prefix}.self_attn.q_proj.bias"), ctx)?,
+            k_bias: try_load_named(beacon, &format!("{prefix}.self_attn.k_proj.bias"), ctx)?,
+            v_bias: try_load_named(beacon, &format!("{prefix}.self_attn.v_proj.bias"), ctx)?,
         };
         let ffn = FfnWeights {
             gate_proj: load_named(beacon, &format!("{prefix}.mlp.gate_proj.weight"), ctx)?,

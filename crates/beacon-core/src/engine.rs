@@ -147,11 +147,11 @@ impl<B: ComputeBackend> Engine<B> {
         let seq_len = tokens.len();
 
         // 1. Embed tokens.
-        // GGUF stores embedding as [hidden, vocab] so we transpose to [vocab, hidden]
-        // before the embedding lookup.
-        let embed_t = self.backend.transpose(&stream, &self.embed_tokens)?;
+        // Embedding weight is [vocab, hidden] (after GGUF dim reversal).
         let indices = self.backend.create_token_tensor(tokens)?;
-        let mut h = self.backend.embedding(&stream, &embed_t, &indices)?;
+        let mut h = self
+            .backend
+            .embedding(&stream, &self.embed_tokens, &indices)?;
 
         // 2. For each layer: attn_norm -> attention -> residual -> ffn_norm -> ffn -> residual.
         for i in 0..self.layers.len() {
@@ -185,7 +185,8 @@ impl<B: ComputeBackend> Engine<B> {
         let h = self
             .backend
             .rms_norm(&stream, &h, &self.final_norm, self.config.rms_norm_eps)?;
-        let logits = self.backend.matmul(&stream, &h, &self.lm_head)?;
+        let lm_head_t = self.backend.transpose(&stream, &self.lm_head)?;
+        let logits = self.backend.matmul(&stream, &h, &lm_head_t)?;
         self.backend.eval(&logits, &stream)?;
 
         // Update KV cache positions.
@@ -227,7 +228,8 @@ impl<B: ComputeBackend> Engine<B> {
     #[allow(
         clippy::cast_possible_wrap,
         clippy::cast_possible_truncation,
-        clippy::cast_precision_loss
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
     )]
     fn attention_block(
         &mut self,
@@ -241,11 +243,31 @@ impl<B: ComputeBackend> Engine<B> {
         let attn = &self.layers[layer_idx].attn;
 
         // Q/K/V projections — use matmul for v0.1 (see doc comment above).
-        // GGUF stores weights as [in_features, out_features], so matmul(x, W)
-        // gives the correct result without transposing.
-        let q = self.backend.matmul(stream, hidden, &attn.q_proj)?;
-        let k = self.backend.matmul(stream, hidden, &attn.k_proj)?;
-        let v = self.backend.matmul(stream, hidden, &attn.v_proj)?;
+        // Weights are [out_features, in_features] (standard convention after
+        // reversing GGUF dims). We need matmul(x, W.T) = matmul(x, [in, out]).
+        let q_w = self.backend.transpose(stream, &attn.q_proj)?;
+        let q = self.backend.matmul(stream, hidden, &q_w)?;
+        let q = if let Some(ref bias) = attn.q_bias {
+            self.backend.add(stream, &q, bias)?
+        } else {
+            q
+        };
+
+        let k_w = self.backend.transpose(stream, &attn.k_proj)?;
+        let k = self.backend.matmul(stream, hidden, &k_w)?;
+        let k = if let Some(ref bias) = attn.k_bias {
+            self.backend.add(stream, &k, bias)?
+        } else {
+            k
+        };
+
+        let v_w = self.backend.transpose(stream, &attn.v_proj)?;
+        let v = self.backend.matmul(stream, hidden, &v_w)?;
+        let v = if let Some(ref bias) = attn.v_bias {
+            self.backend.add(stream, &v, bias)?
+        } else {
+            v
+        };
 
         // Reshape + transpose for multi-head attention.
         // After matmul: q=[seq, num_heads*head_dim], k/v=[seq, num_kv_heads*head_dim]
@@ -356,7 +378,8 @@ impl<B: ComputeBackend> Engine<B> {
                 .reshape(stream, &attn_out, &[seq_len as i64, cfg.hidden_size as i64])?;
 
         // Output projection.
-        self.backend.matmul(stream, &attn_out, &attn.o_proj)
+        let o_w = self.backend.transpose(stream, &attn.o_proj)?;
+        self.backend.matmul(stream, &attn_out, &o_w)
     }
 
     /// FFN block for a single layer (architecture doc section 7.4).
@@ -372,17 +395,20 @@ impl<B: ComputeBackend> Engine<B> {
         let ffn = &self.layers[layer_idx].ffn;
 
         // Gate projection + SiLU.
-        // GGUF stores weights as [in, out], so matmul(x, W) is correct.
-        let gate = self.backend.matmul(stream, hidden, &ffn.gate_proj)?;
+        // Weights are [out, in] after GGUF dim reversal. Transpose for matmul(x, W.T).
+        let gate_w = self.backend.transpose(stream, &ffn.gate_proj)?;
+        let gate = self.backend.matmul(stream, hidden, &gate_w)?;
         let gate = self.backend.silu(stream, &gate)?;
 
         // Up projection.
-        let up = self.backend.matmul(stream, hidden, &ffn.up_proj)?;
+        let up_w = self.backend.transpose(stream, &ffn.up_proj)?;
+        let up = self.backend.matmul(stream, hidden, &up_w)?;
 
         // Gate * Up.
         let inter = self.backend.mul(stream, &gate, &up)?;
 
         // Down projection.
-        self.backend.matmul(stream, &inter, &ffn.down_proj)
+        let down_w = self.backend.transpose(stream, &ffn.down_proj)?;
+        self.backend.matmul(stream, &inter, &down_w)
     }
 }
