@@ -11,33 +11,54 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  build:
-    name: build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-14, ubuntu-latest, windows-latest]
+  # -------------------------------------------------------------------------
+  # macOS ARM64 — primary platform, full build including MLX shim
+  # -------------------------------------------------------------------------
+  build-macos:
+    name: build (macos-14)
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
+      - name: Install build tools
+        run: brew install cmake ninja
+
+      - name: Ensure Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # Build everything except beacon-python (needs maturin, not cargo build)
       - name: cargo build --workspace
-        run: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --exclude beacon-python
 
+      # Tests need --test-threads=1 because MLX Metal has global state
       - name: cargo test --workspace
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets --exclude beacon-python -- --test-threads=1
 
-  lint:
-    name: lint (ubuntu-latest)
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --exclude beacon-python -- -D warnings
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: Shim line count
+        run: scripts/check-shim-lines.sh
+
+  # -------------------------------------------------------------------------
+  # Linux x86_64 — secondary, no MLX, CPU-only crates
+  # -------------------------------------------------------------------------
+  build-linux:
+    name: build (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -48,15 +69,65 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # oniguruma for tokenizers crate
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libonig-dev
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+
+      # Exclude MLX-dependent crates (beacon-mlx needs the shim which needs
+      # MLX which needs Metal on macOS). Also exclude beacon-python and
+      # beacon-core/beacon-cli/beacon-server which depend on beacon-mlx.
+      - name: cargo check (CPU crates)
+        run: |
+          cargo check -p beacon-format
+          cargo check -p beacon-kernels
+          cargo check -p beacon-tokenizer
+          cargo check -p beacon-scheduler
+          cargo check -p beacon-registry
+
+      - name: cargo test (CPU crates)
+        run: |
+          cargo test -p beacon-format
+          cargo test -p beacon-kernels
+          cargo test -p beacon-tokenizer
+          cargo test -p beacon-scheduler
+          cargo test -p beacon-registry
 
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Shim line count
+        run: scripts/check-shim-lines.sh
 
+  # -------------------------------------------------------------------------
+  # Windows x86_64 — build-only
+  # -------------------------------------------------------------------------
+  build-windows:
+    name: build (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Same as Linux: check CPU-only crates
+      - name: cargo check (CPU crates)
+        run: |
+          cargo check -p beacon-format
+          cargo check -p beacon-kernels
+          cargo check -p beacon-tokenizer
+          cargo check -p beacon-scheduler
+
+  # -------------------------------------------------------------------------
+  # Shim build + smoke test (macOS only, Metal enabled)
+  # -------------------------------------------------------------------------
   shim:
     name: shim (macos-14)
     runs-on: macos-14
@@ -69,13 +140,10 @@ jobs:
       - name: Install build tools
         run: brew install cmake ninja
 
-      - name: Ensure Metal Toolchain is present
-        # Idempotent: no-op if already installed on the runner. Required for
-        # MLX's Metal backend (the primary MLX path) since Xcode 26 decoupled
-        # the toolchain from the default install.
+      - name: Ensure Metal Toolchain
         run: xcodebuild -downloadComponent MetalToolchain
 
-      - name: Enforce 2,000-line cap (non-negotiable §1)
+      - name: Enforce 2,000-line cap
         run: scripts/check-shim-lines.sh
 
       - name: Configure shim (Metal enabled)
@@ -86,13 +154,3 @@ jobs:
 
       - name: Run smoke test
         run: ctest --test-dir shim/build --output-on-failure
-
-  shim-lines:
-    name: shim line-count (ubuntu-latest)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout (no submodules)
-        uses: actions/checkout@v4
-
-      - name: Enforce 2,000-line cap (non-negotiable §1)
-        run: scripts/check-shim-lines.sh

@@ -623,7 +623,7 @@ tensors or attention mask handling. Requires focused debugging.
 | # | Step | Description | Status |
 |---|---|---|---|
 | 18 | Model registry (`beacon pull`) | ✅ Download GGUF + tokenizer from HF Hub, convert, cache |
-| 19 | CI validation | Verify GitHub Actions on macOS/Linux/Windows | not started |
+| 19 | CI validation | ✅ GitHub Actions for macOS (full), Linux (CPU crates), Windows (check) |
 | 20 | MLX `quantized_matmul` bridge | Repack GGUF quant blocks to MLX format, 2x memory savings | not started |
 | 21 | Benchmarking vs baselines | Criterion + comparison vs MLX-LM, Ollama, llama.cpp | not started |
 
