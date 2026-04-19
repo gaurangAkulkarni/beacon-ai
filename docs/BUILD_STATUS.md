@@ -605,11 +605,23 @@ tensors or attention mask handling. Requires focused debugging.
 
 ---
 
-### Steps 17 – 21 ⏳ not started
+### Step 17 — Wire HTTP server (Ollama + OpenAI) ✅ complete
+
+**Delivered:**
+- Real inference wired into `/api/generate` and `/api/chat` (Ollama API).
+- OpenAI-compatible `/v1/chat/completions` and `/v1/models` endpoints added.
+- Shared `AppState` with `Mutex<Engine>` + tokenizer, loaded at startup.
+- `Engine::reset_cache()` clears KV cache between requests.
+- `run_inference()` helper: encode → prefill → decode loop → return text.
+- Server startup via `BEACON_MODEL` + `BEACON_TOKENIZER` env vars.
+- Non-streaming responses for v0.2; NDJSON/SSE streaming is a follow-up.
+
+---
+
+### Steps 18 – 21 ⏳ not started
 
 | # | Step | Description | Status |
 |---|---|---|---|
-| 17 | Wire HTTP server | Connect `/api/generate` + `/api/chat` to real engine with NDJSON streaming | not started |
 | 18 | Model registry (`beacon pull`) | Download GGUF from HuggingFace Hub, convert, cache | not started |
 | 19 | CI validation | Verify GitHub Actions on macOS/Linux/Windows | not started |
 | 20 | MLX `quantized_matmul` bridge | Repack GGUF quant blocks to MLX format, 2x memory savings | not started |

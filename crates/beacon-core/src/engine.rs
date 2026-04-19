@@ -134,6 +134,16 @@ impl<B: ComputeBackend> Engine<B> {
         &self.backend
     }
 
+    /// Reset all KV cache layers to empty (length 0).
+    ///
+    /// Call this before starting a new inference request so that the cache
+    /// does not contain stale state from a previous generation.
+    pub fn reset_cache(&mut self) {
+        for kv in &mut self.cache {
+            kv.current_length = 0;
+        }
+    }
+
     /// Run the full transformer forward pass on a sequence of tokens.
     ///
     /// Returns the logits tensor. `position` is the starting position in the

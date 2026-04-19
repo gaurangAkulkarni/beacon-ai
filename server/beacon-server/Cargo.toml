@@ -27,3 +27,11 @@ serde_json = "1"
 tower-http = { version = "0.6", features = ["cors"] }
 thiserror = "2"
 dirs = "6"
+beacon-core = { path = "../../crates/beacon-core" }
+beacon-mlx = { path = "../../crates/beacon-mlx" }
+beacon-format = { path = "../../crates/beacon-format" }
+beacon-tokenizer = { path = "../../crates/beacon-tokenizer" }
+beacon-scheduler = { path = "../../crates/beacon-scheduler" }
+memmap2 = "0.9"
+rand = "0.9"
+uuid = { version = "1", features = ["v4"] }

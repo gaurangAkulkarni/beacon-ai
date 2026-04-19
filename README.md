@@ -422,11 +422,11 @@ Steps 1–15 build the architecture. Steps 16–21 wire the pieces into a workin
 - Tokenize prompt → forward pass loop → sampling → detokenize → print.
 - ✅ Success: `beacon run qwen2.5-0.5b "Hello"` produces coherent multi-sentence output on macOS ARM64.
 
-**Step 17: Wire HTTP server to real engine**
-- Connect `/api/generate` and `/api/chat` to the engine + scheduler.
-- NDJSON streaming: emit one JSON object per generated token.
-- `beacon serve` loads a model and serves requests.
-- ✅ Success: Open WebUI or `curl` connects to `localhost:11434/api/generate` and receives streamed text.
+**Step 17: Wire HTTP server to real engine (Ollama + OpenAI compatible)**
+- Connect Ollama endpoints (`/api/generate`, `/api/chat`) to the engine + scheduler. NDJSON streaming.
+- Add OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/models`). SSE streaming (`data: {...}\n\n`).
+- `beacon serve` loads a model and serves requests on both APIs.
+- ✅ Success: Open WebUI connects via Ollama API; any OpenAI SDK client connects via `/v1/chat/completions` and receives streamed text.
 
 **Step 18: Model registry (`beacon pull`)**
 - Implement `beacon-registry` crate: download GGUF models from Hugging Face Hub.
