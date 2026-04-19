@@ -228,6 +228,16 @@ pub fn reshape(
     Ok(MlxTensor::from_raw(ctx, out))
 }
 
+/// Transpose the last two dimensions of a tensor.
+pub fn transpose(stream: &MlxStream, x: &MlxTensor) -> Result<MlxTensor, MlxError> {
+    let ctx = Arc::clone(&x.ctx);
+    let mut out: *mut ffi::BeaconTensor = std::ptr::null_mut();
+    let status =
+        unsafe { ffi::beacon_op_transpose(ctx.inner, stream.inner, x.inner, &raw mut out) };
+    status_to_result(status)?;
+    Ok(MlxTensor::from_raw(ctx, out))
+}
+
 /// Embedding lookup: select rows from `weight` by `indices`.
 ///
 /// `weight`: `[vocab_size, hidden_dim]`, `indices`: `[seq_len]` (i32).

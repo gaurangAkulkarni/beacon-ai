@@ -134,6 +134,14 @@ impl ComputeBackend for MlxBackend {
         beacon_mlx::ops::reshape(stream, x, shape).map_err(EngineError::from)
     }
 
+    fn transpose(
+        &self,
+        stream: &Self::Stream,
+        x: &Self::Tensor,
+    ) -> Result<Self::Tensor, EngineError> {
+        Ok(beacon_mlx::ops::transpose(stream, x)?)
+    }
+
     fn embedding(
         &self,
         stream: &Self::Stream,

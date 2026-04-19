@@ -339,6 +339,35 @@ int32_t beacon_op_reshape(
     });
 }
 
+int32_t beacon_op_transpose(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* x,
+    BeaconTensor** out) {
+    return beacon::guard([&]() -> int32_t {
+        if (any_null({ctx, stream, x, out})) {
+            beacon::set_error_message("beacon_op_transpose: null argument");
+            return BEACON_ERR_INVALID_ARGUMENT;
+        }
+#ifdef BEACON_NO_MLX
+        return BEACON_ERR_UNKNOWN;
+#else
+        auto ndim = x->arr.ndim();
+        if (ndim < 2) {
+            beacon::set_error_message("beacon_op_transpose: need at least 2 dims");
+            return BEACON_ERR_INVALID_ARGUMENT;
+        }
+        // Swap the last two axes.
+        auto result = mlx::core::swapaxes(
+            x->arr,
+            static_cast<int>(ndim - 2),
+            static_cast<int>(ndim - 1),
+            stream->stream);
+        *out = box_result(std::move(result));
+        return BEACON_OK;
+#endif
+    });
+}
+
 int32_t beacon_op_embedding(
     BeaconContext* ctx, BeaconStream* stream,
     const BeaconTensor* weight, const BeaconTensor* indices,

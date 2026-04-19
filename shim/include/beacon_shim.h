@@ -165,6 +165,12 @@ int32_t beacon_op_reshape(
     const int64_t* new_shape, size_t new_ndim,
     BeaconTensor** out);
 
+// Transpose the last two dimensions of a tensor.
+int32_t beacon_op_transpose(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* x,
+    BeaconTensor** out);
+
 // Embedding lookup: select rows from a weight matrix by index.
 // weight: [vocab_size, hidden_dim], indices: [seq_len] (int32)
 // out: [seq_len, hidden_dim]

@@ -261,6 +261,45 @@ impl ComputeBackend for CpuBackend {
         })
     }
 
+    #[allow(clippy::many_single_char_names)]
+    fn transpose(
+        &self,
+        _stream: &Self::Stream,
+        x: &Self::Tensor,
+    ) -> Result<Self::Tensor, EngineError> {
+        let shape = &x.shape;
+        if shape.len() < 2 {
+            return Err(EngineError::ShapeMismatch(
+                "transpose needs >= 2 dims".into(),
+            ));
+        }
+        let ndim = shape.len();
+        // Swap last two dims.
+        let mut new_shape = shape.clone();
+        new_shape.swap(ndim - 2, ndim - 1);
+        // For 2-D: data[i*n + j] -> data[j*m + i].
+        let m = dim(shape[ndim - 2]);
+        let n = dim(shape[ndim - 1]);
+        let batch_size: usize = shape[..ndim - 2]
+            .iter()
+            .map(|&d| dim(d))
+            .product::<usize>()
+            .max(1);
+        let mut new_data = vec![0.0f32; x.data.len()];
+        for b in 0..batch_size {
+            let offset = b * m * n;
+            for i in 0..m {
+                for j in 0..n {
+                    new_data[offset + j * m + i] = x.data[offset + i * n + j];
+                }
+            }
+        }
+        Ok(CpuTensor {
+            data: new_data,
+            shape: new_shape,
+        })
+    }
+
     fn reshape(
         &self,
         _stream: &Self::Stream,

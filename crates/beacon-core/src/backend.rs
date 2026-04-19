@@ -109,6 +109,13 @@ pub trait ComputeBackend {
         shape: &[i64],
     ) -> Result<Self::Tensor, EngineError>;
 
+    /// Transpose the last two dimensions of a tensor.
+    fn transpose(
+        &self,
+        stream: &Self::Stream,
+        x: &Self::Tensor,
+    ) -> Result<Self::Tensor, EngineError>;
+
     /// Embedding lookup: select rows from `weight` by `indices`.
     fn embedding(
         &self,

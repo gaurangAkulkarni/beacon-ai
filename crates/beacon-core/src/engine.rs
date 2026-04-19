@@ -142,10 +142,11 @@ impl<B: ComputeBackend> Engine<B> {
         let seq_len = tokens.len();
 
         // 1. Embed tokens.
+        // GGUF stores embedding as [hidden, vocab] so we transpose to [vocab, hidden]
+        // before the embedding lookup.
+        let embed_t = self.backend.transpose(&stream, &self.embed_tokens)?;
         let indices = self.backend.create_token_tensor(tokens)?;
-        let mut h = self
-            .backend
-            .embedding(&stream, &self.embed_tokens, &indices)?;
+        let mut h = self.backend.embedding(&stream, &embed_t, &indices)?;
 
         // 2. For each layer: attn_norm -> attention -> residual -> ffn_norm -> ffn -> residual.
         for i in 0..self.layers.len() {
@@ -235,6 +236,8 @@ impl<B: ComputeBackend> Engine<B> {
         let attn = &self.layers[layer_idx].attn;
 
         // Q/K/V projections — use matmul for v0.1 (see doc comment above).
+        // GGUF stores weights as [in_features, out_features], so matmul(x, W)
+        // gives the correct result without transposing.
         let q = self.backend.matmul(stream, hidden, &attn.q_proj)?;
         let k = self.backend.matmul(stream, hidden, &attn.k_proj)?;
         let v = self.backend.matmul(stream, hidden, &attn.v_proj)?;
@@ -299,15 +302,41 @@ impl<B: ComputeBackend> Engine<B> {
             return Err(EngineError::ContextOverflow);
         }
 
+        // Squeeze batch dim from K/V for cache update: [1,heads,seq,dim] → [seq,heads,dim]
+        // The KV cache is allocated as [max_ctx, num_kv_heads, head_dim].
+        let k_squeezed = self.backend.reshape(
+            stream,
+            &k,
+            &[seq_len as i64, cfg.num_kv_heads as i64, cfg.head_dim as i64],
+        )?;
+        let v_squeezed = self.backend.reshape(
+            stream,
+            &v,
+            &[seq_len as i64, cfg.num_kv_heads as i64, cfg.head_dim as i64],
+        )?;
+
         // KV cache update — write new K/V at current position and get views
         // over the full cached sequence for attention.
-        let (k_full, v_full) = self.backend.kv_cache_update(
+        let (k_cached, v_cached) = self.backend.kv_cache_update(
             stream,
             &self.cache[layer_idx].cache_k,
             &self.cache[layer_idx].cache_v,
-            &k,
-            &v,
+            &k_squeezed,
+            &v_squeezed,
             position as i64,
+        )?;
+
+        // Re-add batch dim for attention: [cached_len, heads, dim] → [1, heads, cached_len, dim]
+        let cached_len = (position + seq_len) as i64;
+        let k_full = self.backend.reshape(
+            stream,
+            &k_cached,
+            &[1, cfg.num_kv_heads as i64, cached_len, cfg.head_dim as i64],
+        )?;
+        let v_full = self.backend.reshape(
+            stream,
+            &v_cached,
+            &[1, cfg.num_kv_heads as i64, cached_len, cfg.head_dim as i64],
         )?;
 
         // Scaled dot-product attention (fused in MLX backend).
@@ -338,6 +367,7 @@ impl<B: ComputeBackend> Engine<B> {
         let ffn = &self.layers[layer_idx].ffn;
 
         // Gate projection + SiLU.
+        // GGUF stores weights as [in, out], so matmul(x, W) is correct.
         let gate = self.backend.matmul(stream, hidden, &ffn.gate_proj)?;
         let gate = self.backend.silu(stream, &gate)?;
 
