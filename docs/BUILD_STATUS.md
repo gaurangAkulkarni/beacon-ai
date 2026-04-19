@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 4 — Model format + GGUF import (`beacon-format` crate).**
+**Next up: Step 5 — Tokenizer (`beacon-tokenizer` crate).**
 
-Steps 1–3 complete and committed. All locally verified on macOS ARM64.
+Steps 1–4 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -161,14 +161,64 @@ Architecture reference: [§4 Rust FFI Layer](architecture.md#4-rust-ffi-layer-be
 
 ---
 
-### Steps 4 – 15 ⏳ not started
+### Step 4 — Model format + GGUF import ✅ complete
+
+Architecture reference: [§9 Model Format (.beacon)](architecture.md#9-model-format-beacon).
+
+**Success criteria:**
+- [x] Load GGUF, convert to `.beacon`, enumerate all tensors correctly
+
+**Delivered:**
+- Pure Rust GGUF v3 parser (`src/gguf/`): header, metadata KV (all types),
+  tensor info, config extraction for Llama/Qwen/Phi/Gemma families.
+- `.beacon` format writer (`src/beacon/writer.rs`): 64-byte-aligned tensor
+  data, length-prefixed config + tokenizer JSON.
+- `.beacon` format reader (`src/beacon/reader.rs`): mmap-based, zero-copy
+  tensor data access.
+- GGUF → `.beacon` converter (`src/convert.rs`): one-time conversion with
+  caching at `~/.beacon/models/<name>/model.beacon`.
+- `ModelConfig`, `Architecture`, `RopeScaling` types with serde
+  Serialize+Deserialize.
+- `BeaconDtype` with block size / byte length calculations for all supported
+  quantisation types (F32, F16, BF16, Q4_0, Q4_K, Q5_K, Q6_K, Q8_0).
+- Dependencies: `thiserror`, `memmap2`, `serde` (derive), `serde_json`;
+  dev: `tempfile`.
+
+**Local verification (macOS ARM64):**
+- `cargo build -p beacon-format` — clean
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-format --all-targets -- -D warnings` — clean
+- `cargo test -p beacon-format` — 7/7 passed, 1 ignored (real model test)
+- `cargo build --workspace --all-targets` — clean
+
+**Tests:**
+- Synthetic mini-GGUF builder (constructs valid GGUF v3 in memory)
+- GGUF parse + `ModelConfig` extraction
+- `.beacon` round-trip (write → read → verify all fields + data)
+- Full GGUF → `.beacon` conversion with data integrity check
+- `ModelConfig` JSON serialisation round-trip
+- `BeaconDtype` round-trip + data length calculations
+- `#[ignore]` real-model test gated behind `BEACON_TEST_GGUF` env var
+
+**Design decisions recorded:**
+- Pure Rust GGUF parser (no gguflib dependency) — aligns with "Rust for
+  everything except MLX" principle.
+- `ModelConfig` defined in `beacon-format` (not `beacon-core`) — `beacon-core`
+  will depend on `beacon-format` and re-export it, avoiding circular deps.
+- Writer takes `&[&[u8]]` parallel to tensors slice (not a closure) to avoid
+  lifetime issues with mmap-backed data.
+- GGUF tokenizer metadata serialised as JSON blob in `.beacon` header; Step 5
+  will define the consumption schema.
+
+---
+
+### Steps 5 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 4 | Model format + GGUF import | §9 | not started |
 | 5 | Tokenizer | §10 | not started |
 | 6 | CPU kernels | §5, §6.2 | not started |
 | 7 | Transformer forward pass on MLX | §7, §8 | not started |
@@ -220,6 +270,9 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | `beacon_kernel_q4_dequant_mul` returns `BEACON_ERR_UNKNOWN` in v0.1 | Custom Metal kernel is scoped to Step 6 / v0.2. ABI surface is present; callers fall back to `beacon_op_quantized_matmul`. |
 | 2026-04-19 | MLX tests serialised via `Mutex` | MLX Metal backend has global state unsafe for concurrent multi-context access. Architecture specifies one `MlxContext` per process; tests honour this with a shared lock. |
 | 2026-04-19 | `build.rs` uses `cmake::Config::build_target()` instead of install | Shim CMakeLists.txt has no install rules; the cmake crate's default `--target install` would fail. Using `build_target("beacon_shim")` and searching `out/build/` for the static libraries. |
+| 2026-04-19 | Pure Rust GGUF parser (no gguflib FFI) | Aligns with "Rust for everything except MLX". Cross-platform, no C dependency for format parsing. |
+| 2026-04-19 | `ModelConfig` defined in `beacon-format`, not `beacon-core` | Natural dependency direction: `beacon-core` depends on `beacon-format` for model loading. Avoids circular dependency. |
+| 2026-04-19 | GGUF tokenizer metadata stored as JSON blob in `.beacon` header | Step 5 (tokenizer) will define the exact consumption schema. Best-effort serialisation of all `tokenizer.ggml.*` keys now. |
 
 ---
 
