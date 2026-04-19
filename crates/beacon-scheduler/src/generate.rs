@@ -45,6 +45,7 @@ pub fn generate_stream_sync(
     let mut position = start_position;
     let mut previous_tokens: Vec<u32> = Vec::new();
 
+    #[allow(clippy::explicit_counter_loop)]
     for step in 0..params.max_tokens {
         // Run forward pass.
         let mut logits = forward_fn(current_token, position)?;
