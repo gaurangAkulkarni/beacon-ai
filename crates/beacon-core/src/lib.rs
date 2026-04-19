@@ -9,6 +9,7 @@
 //! added in later steps.
 
 mod backend;
+mod cpu_backend;
 mod engine;
 mod error;
 mod kv_cache;
@@ -16,6 +17,7 @@ mod mlx_backend;
 mod weights;
 
 pub use backend::ComputeBackend;
+pub use cpu_backend::{CpuBackend, CpuStream, CpuTensor};
 pub use engine::Engine;
 pub use error::EngineError;
 pub use kv_cache::KvCache;

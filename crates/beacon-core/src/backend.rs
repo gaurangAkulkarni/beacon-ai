@@ -122,4 +122,24 @@ pub trait ComputeBackend {
 
     /// Read tensor values into a host `Vec<f32>`.
     fn read_f32(&self, t: &Self::Tensor, n: usize) -> Result<Vec<f32>, EngineError>;
+
+    /// Update KV cache at `position` with new K/V values.
+    ///
+    /// Writes `new_k` and `new_v` into the cache tensors at the given position,
+    /// then returns views (or copies) covering `[0..=position]` for attention.
+    fn kv_cache_update(
+        &self,
+        stream: &Self::Stream,
+        cache_k: &Self::Tensor,
+        cache_v: &Self::Tensor,
+        new_k: &Self::Tensor,
+        new_v: &Self::Tensor,
+        position: i64,
+    ) -> Result<(Self::Tensor, Self::Tensor), EngineError>;
+
+    /// Create a 1-D tensor of token IDs for embedding lookup.
+    ///
+    /// The exact storage format is backend-specific (I32 for MLX, f32 indices
+    /// for CPU).
+    fn create_token_tensor(&self, tokens: &[u32]) -> Result<Self::Tensor, EngineError>;
 }

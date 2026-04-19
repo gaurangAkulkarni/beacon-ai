@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use beacon_mlx::{MlxContext, MlxStream, MlxTensor};
+use beacon_mlx::{Dtype, MlxContext, MlxStream, MlxTensor};
 
 use crate::backend::ComputeBackend;
 use crate::error::EngineError;
@@ -149,5 +149,47 @@ impl ComputeBackend for MlxBackend {
 
     fn read_f32(&self, t: &Self::Tensor, n: usize) -> Result<Vec<f32>, EngineError> {
         t.read_f32(n).map_err(EngineError::from)
+    }
+
+    fn kv_cache_update(
+        &self,
+        stream: &Self::Stream,
+        cache_k: &Self::Tensor,
+        cache_v: &Self::Tensor,
+        new_k: &Self::Tensor,
+        new_v: &Self::Tensor,
+        position: i64,
+    ) -> Result<(Self::Tensor, Self::Tensor), EngineError> {
+        beacon_mlx::ops::kv_cache_update(stream, cache_k, cache_v, new_k, new_v, position)
+            .map_err(EngineError::from)
+    }
+
+    /// Create an `MlxTensor` containing token IDs as I32.
+    ///
+    /// Uses an anonymous mmap so the data stays in memory (no disk I/O).
+    /// This satisfies the non-negotiable rule about no blocking in the decode
+    /// hot path — anonymous mmap is a pure memory allocation.
+    #[allow(clippy::cast_possible_wrap)]
+    fn create_token_tensor(&self, tokens: &[u32]) -> Result<Self::Tensor, EngineError> {
+        let n = tokens.len();
+        let byte_len = n * 4;
+
+        let mut mmap_mut = memmap2::MmapMut::map_anon(byte_len)
+            .map_err(|e| EngineError::Backend(format!("anonymous mmap failed: {e}")))?;
+
+        for (i, &tok) in tokens.iter().enumerate() {
+            let val = tok as i32;
+            let offset = i * 4;
+            mmap_mut[offset..offset + 4].copy_from_slice(&val.to_ne_bytes());
+        }
+
+        let mmap = mmap_mut
+            .make_read_only()
+            .map_err(|e| EngineError::Backend(format!("mmap make_read_only failed: {e}")))?;
+        let mmap = Arc::new(mmap);
+
+        let shape = [n as i64];
+        MlxTensor::from_mmap(Arc::clone(&self.ctx), mmap, 0, &shape, Dtype::I32)
+            .map_err(EngineError::from)
     }
 }

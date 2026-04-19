@@ -6,9 +6,10 @@
 use std::sync::Arc;
 
 use beacon_format::{BeaconFile, ModelConfig};
-use beacon_mlx::{Dtype, MlxContext, MlxStream, MlxTensor};
+use beacon_mlx::{Dtype, MlxTensor};
 
 use crate::backend::ComputeBackend;
+use crate::cpu_backend::{CpuBackend, CpuTensor};
 use crate::error::EngineError;
 use crate::kv_cache::KvCache;
 use crate::mlx_backend::MlxBackend;
@@ -70,7 +71,64 @@ impl Engine<MlxBackend> {
             cache,
         })
     }
+}
 
+impl Engine<CpuBackend> {
+    /// Create a CPU-backend engine from synthetic/pre-built weights.
+    ///
+    /// In v0.1, the CPU backend is the fallback path. This constructor takes
+    /// pre-built `CpuTensor` weights directly. Loading from `.beacon` files
+    /// with F32 weight conversion is deferred until real model testing.
+    #[allow(clippy::cast_possible_wrap)]
+    pub fn load_cpu(
+        config: ModelConfig,
+        embed_tokens: CpuTensor,
+        layers: Vec<LayerWeights<CpuTensor>>,
+        final_norm: CpuTensor,
+        lm_head: CpuTensor,
+    ) -> Result<Self, EngineError> {
+        let backend = CpuBackend;
+
+        // Allocate KV caches — zero-filled CpuTensors.
+        let mut cache = Vec::with_capacity(config.num_layers);
+        let kv_dim = config.num_kv_heads * config.head_dim;
+        for _ in 0..config.num_layers {
+            let cache_k = CpuTensor {
+                data: vec![0.0; config.max_position_embeddings * kv_dim],
+                shape: vec![
+                    config.max_position_embeddings as i64,
+                    config.num_kv_heads as i64,
+                    config.head_dim as i64,
+                ],
+            };
+            let cache_v = CpuTensor {
+                data: vec![0.0; config.max_position_embeddings * kv_dim],
+                shape: vec![
+                    config.max_position_embeddings as i64,
+                    config.num_kv_heads as i64,
+                    config.head_dim as i64,
+                ],
+            };
+            cache.push(KvCache {
+                cache_k,
+                cache_v,
+                current_length: 0,
+            });
+        }
+
+        Ok(Self {
+            config,
+            backend,
+            embed_tokens,
+            layers,
+            final_norm,
+            lm_head,
+            cache,
+        })
+    }
+}
+
+impl<B: ComputeBackend> Engine<B> {
     /// Run the full transformer forward pass on a sequence of tokens.
     ///
     /// Returns the logits tensor. `position` is the starting position in the
@@ -79,12 +137,12 @@ impl Engine<MlxBackend> {
     ///
     /// Follows architecture doc section 7.5.
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-    pub fn forward(&mut self, tokens: &[u32], position: usize) -> Result<MlxTensor, EngineError> {
+    pub fn forward(&mut self, tokens: &[u32], position: usize) -> Result<B::Tensor, EngineError> {
         let stream = self.backend.new_stream()?;
         let seq_len = tokens.len();
 
         // 1. Embed tokens.
-        let indices = create_token_tensor(self.backend.context(), tokens)?;
+        let indices = self.backend.create_token_tensor(tokens)?;
         let mut h = self
             .backend
             .embedding(&stream, &self.embed_tokens, &indices)?;
@@ -167,12 +225,12 @@ impl Engine<MlxBackend> {
     )]
     fn attention_block(
         &mut self,
-        stream: &MlxStream,
-        hidden: &MlxTensor,
+        stream: &B::Stream,
+        hidden: &B::Tensor,
         layer_idx: usize,
         position: usize,
         seq_len: usize,
-    ) -> Result<MlxTensor, EngineError> {
+    ) -> Result<B::Tensor, EngineError> {
         let cfg = &self.config;
         let attn = &self.layers[layer_idx].attn;
 
@@ -243,7 +301,7 @@ impl Engine<MlxBackend> {
 
         // KV cache update — write new K/V at current position and get views
         // over the full cached sequence for attention.
-        let (k_full, v_full) = beacon_mlx::ops::kv_cache_update(
+        let (k_full, v_full) = self.backend.kv_cache_update(
             stream,
             &self.cache[layer_idx].cache_k,
             &self.cache[layer_idx].cache_v,
@@ -273,10 +331,10 @@ impl Engine<MlxBackend> {
     /// projection, then down projection.
     fn ffn_block(
         &self,
-        stream: &MlxStream,
-        hidden: &MlxTensor,
+        stream: &B::Stream,
+        hidden: &B::Tensor,
         layer_idx: usize,
-    ) -> Result<MlxTensor, EngineError> {
+    ) -> Result<B::Tensor, EngineError> {
         let ffn = &self.layers[layer_idx].ffn;
 
         // Gate projection + SiLU.
@@ -292,34 +350,4 @@ impl Engine<MlxBackend> {
         // Down projection.
         self.backend.matmul(stream, &inter, &ffn.down_proj)
     }
-}
-
-/// Create an `MlxTensor` containing token IDs as I32.
-///
-/// Uses an anonymous mmap so the data stays in memory (no disk I/O).
-/// This satisfies the non-negotiable rule about no blocking in the decode
-/// hot path — anonymous mmap is a pure memory allocation.
-#[allow(clippy::cast_possible_wrap)]
-fn create_token_tensor(ctx: &Arc<MlxContext>, tokens: &[u32]) -> Result<MlxTensor, EngineError> {
-    let n = tokens.len();
-    let byte_len = n * 4;
-
-    // Create an anonymous mmap and write the token data into it.
-    let mut mmap_mut = memmap2::MmapMut::map_anon(byte_len)
-        .map_err(|e| EngineError::Backend(format!("anonymous mmap failed: {e}")))?;
-
-    // Write i32 token IDs into the mmap buffer.
-    for (i, &tok) in tokens.iter().enumerate() {
-        let val = tok as i32;
-        let offset = i * 4;
-        mmap_mut[offset..offset + 4].copy_from_slice(&val.to_ne_bytes());
-    }
-
-    let mmap = mmap_mut
-        .make_read_only()
-        .map_err(|e| EngineError::Backend(format!("mmap make_read_only failed: {e}")))?;
-    let mmap = Arc::new(mmap);
-
-    let shape = [n as i64];
-    MlxTensor::from_mmap(Arc::clone(ctx), mmap, 0, &shape, Dtype::I32).map_err(EngineError::from)
 }

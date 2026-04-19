@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 8 — Transformer forward pass on CPU (`beacon-core` crate).**
+**Next up: Step 9 — Scheduler (`beacon-scheduler` crate).**
 
-Steps 1–7 complete and committed. All locally verified on macOS ARM64.
+Steps 1–8 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -339,14 +339,46 @@ Architecture reference: [§7 Forward Pass](architecture.md#7-forward-pass-archit
 
 ---
 
-### Steps 8 – 15 ⏳ not started
+### Step 8 — Transformer forward pass on CPU ✅ complete
+
+Architecture reference: [§5 Backend Selection](architecture.md#5-backend-selection).
+
+**Success criteria:**
+- [x] `CpuBackend` implements all `ComputeBackend` methods
+- [x] Forward pass code shared between MLX and CPU backends (generic
+  `impl<B: ComputeBackend> Engine<B>`)
+- [x] CPU attention with GQA support verified
+- [x] 21 tests pass (18 CPU backend ops + 3 existing)
+- [ ] Same prompts produce same logits as MLX backend (requires real model;
+  gated behind `BEACON_TEST_MODEL` env var)
+
+**Delivered:**
+- `CpuTensor` (f32 data + shape), `CpuStream` (no-op), `CpuBackend`.
+- All `ComputeBackend` methods implemented using `beacon_kernels::ops`.
+- CPU attention with full GQA support (query heads mapped to KV heads).
+- Refactored `Engine` so `forward()`, `attention_block()`, `ffn_block()`,
+  `generate_next_token()` are generic `impl<B: ComputeBackend> Engine<B>`.
+- Added `kv_cache_update` and `create_token_tensor` to `ComputeBackend`
+  trait.
+- `Engine<CpuBackend>::load_cpu()` for constructing CPU engines.
+- 18 new CPU backend tests.
+
+**Local verification (macOS ARM64):**
+- `cargo build -p beacon-core` — clean
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-core --all-targets -- -D warnings` — clean
+- `cargo test -p beacon-core` — 21/21 passed, 1 ignored
+- `cargo build --workspace --all-targets` — clean
+
+---
+
+### Steps 9 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 8 | Transformer forward pass on CPU | §5 | not started |
 | 9 | Scheduler | §11 | not started |
 | 10 | CLI | §12.3 | not started |
 | 11 | HTTP server | §12.4 | not started |
@@ -404,6 +436,9 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | `beacon_op_reshape` + `beacon_op_embedding` added to shim | Needed for multi-head attention reshape and token embedding lookup. MLX lazy graph requires these as graph nodes, not Rust-side operations. +60 lines (1,089 / 2,000). |
 | 2026-04-19 | v0.1 uses `matmul` not `quantized_matmul` for weight projections | GGUF Q4 bytes are not in MLX's internal quantization format. The quantized path requires a format bridge between GGUF block layouts and MLX's `quantized_matmul` expectations (v0.2). |
 | 2026-04-19 | Token tensor via anonymous mmap | Avoids heap allocation and disk I/O in the decode hot path for creating I32 index tensors. |
+| 2026-04-19 | Forward pass generified over `ComputeBackend` | `forward()`, `attention_block()`, `ffn_block()` now `impl<B: ComputeBackend> Engine<B>`. Only `load()` is backend-specific. Zero code duplication between MLX and CPU paths. |
+| 2026-04-19 | `kv_cache_update` + `create_token_tensor` added to `ComputeBackend` | Required to generalise the forward pass — these were MLX-specific calls embedded in the engine. |
+| 2026-04-19 | CPU `quantized_matmul` returns error in v0.1 | CPU Q4 matmul exists in beacon-kernels but the ComputeBackend interface doesn't match its API yet. F32 matmul works; quantized path is v0.2. |
 
 ---
 
