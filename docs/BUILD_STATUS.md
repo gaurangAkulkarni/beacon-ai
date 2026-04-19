@@ -590,11 +590,25 @@ Architecture reference: [§13.3 Correctness Tests](architecture.md#133-correctne
 
 These steps wire the v0.1 architecture into a working product.
 
-### Steps 16 – 21 ⏳ not started
+### Step 16 — End-to-end text generation 🔧 in progress
+
+**Delivered:**
+- `beacon run model "prompt" --tokenizer tokenizer.json` wired end-to-end
+- Tokenizer + engine + scheduler connected: encode → prefill → decode loop → print
+- `swapaxes` op added to shim + backend for multi-head attention layout
+- KV cache prefill fix for multi-token sequences
+- `--tokenizer` flag with auto-detection next to model file
+
+**Status:** Pipeline runs and produces tokens, but output quality is poor.
+Attention correctness bug — likely in RoPE application on 4D multi-head
+tensors or attention mask handling. Requires focused debugging.
+
+---
+
+### Steps 17 – 21 ⏳ not started
 
 | # | Step | Description | Status |
 |---|---|---|---|
-| 16 | End-to-end text generation | Wire tokenizer + engine + scheduler in `beacon run` | not started |
 | 17 | Wire HTTP server | Connect `/api/generate` + `/api/chat` to real engine with NDJSON streaming | not started |
 | 18 | Model registry (`beacon pull`) | Download GGUF from HuggingFace Hub, convert, cache | not started |
 | 19 | CI validation | Verify GitHub Actions on macOS/Linux/Windows | not started |
