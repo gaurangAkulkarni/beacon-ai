@@ -10,6 +10,7 @@
 
 mod backend;
 mod cpu_backend;
+pub mod dequant;
 mod engine;
 mod error;
 mod kv_cache;

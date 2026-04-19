@@ -129,7 +129,14 @@ fn hf_to_gguf_name(hf_name: &str) -> String {
 
 /// Create an `MlxTensor` from a tensor metadata entry in a beacon file.
 ///
-/// The tensor is backed by the file's mmap (zero-copy).
+/// For non-quantized tensors (F16, F32, etc.), the tensor is backed by the
+/// file's mmap (zero-copy). For quantized tensors (`Q4_0`, `Q8_0`, `Q4_K`, etc.),
+/// the raw bytes are dequantized to F16 at load time and placed in an
+/// anonymous mmap, because MLX's `matmul` cannot operate on packed quantized
+/// byte data directly.
+///
+/// This costs memory (~2x for Q4 → F16) but is correct and enables all GGUF
+/// quantization types to work through the standard `matmul` path.
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 fn load_tensor(
     beacon: &BeaconFile,
@@ -137,10 +144,44 @@ fn load_tensor(
     ctx: &Arc<MlxContext>,
 ) -> Result<MlxTensor, EngineError> {
     let shape: Vec<i64> = meta.shape.iter().map(|&d| d as i64).collect();
-    let dtype = beacon_dtype_to_mlx(meta.dtype);
-    let mmap = Arc::clone(beacon.mmap());
-    let offset = meta.data_offset as usize;
-    MlxTensor::from_mmap(Arc::clone(ctx), mmap, offset, &shape, dtype).map_err(EngineError::from)
+
+    if crate::dequant::is_quantized(meta.dtype) {
+        // Dequantize: read raw quantized bytes, expand to F16, store in
+        // anonymous mmap, and create an MlxTensor with Dtype::F16.
+        let mmap = beacon.mmap();
+        let offset = meta.data_offset as usize;
+        let data_len = meta.data_length as usize;
+        let raw_data = &mmap[offset..offset + data_len];
+        let num_elements = meta.num_elements();
+
+        let f16_data = crate::dequant::dequantize_to_f16(raw_data, meta.dtype, num_elements);
+
+        // Write f16 data into an anonymous mmap.
+        let byte_len = f16_data.len() * 2;
+        let mut mmap_mut = memmap2::MmapMut::map_anon(byte_len)
+            .map_err(|e| EngineError::Backend(format!("anonymous mmap failed: {e}")))?;
+
+        // Copy f16 values as little-endian u16 bytes.
+        for (i, &val) in f16_data.iter().enumerate() {
+            let off = i * 2;
+            mmap_mut[off..off + 2].copy_from_slice(&val.to_le_bytes());
+        }
+
+        let anon_mmap = mmap_mut
+            .make_read_only()
+            .map_err(|e| EngineError::Backend(format!("mmap make_read_only failed: {e}")))?;
+        let anon_mmap = Arc::new(anon_mmap);
+
+        MlxTensor::from_mmap(Arc::clone(ctx), anon_mmap, 0, &shape, Dtype::F16)
+            .map_err(EngineError::from)
+    } else {
+        // Non-quantized: zero-copy from the file's mmap.
+        let dtype = beacon_dtype_to_mlx(meta.dtype);
+        let mmap = Arc::clone(beacon.mmap());
+        let offset = meta.data_offset as usize;
+        MlxTensor::from_mmap(Arc::clone(ctx), mmap, offset, &shape, dtype)
+            .map_err(EngineError::from)
+    }
 }
 
 /// Load a named tensor from the beacon file.
