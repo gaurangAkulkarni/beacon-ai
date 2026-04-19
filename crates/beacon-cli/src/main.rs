@@ -4,9 +4,12 @@
 //! `serve` per architecture doc section 12.3.
 
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use beacon_core::ComputeBackend as _;
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use owo_colors::OwoColorize;
@@ -48,6 +51,9 @@ enum Command {
         /// Top-p / nucleus sampling (omit for no top-p filtering).
         #[arg(long)]
         top_p: Option<f32>,
+        /// Path to tokenizer.json (auto-detected if not specified).
+        #[arg(long)]
+        tokenizer: Option<String>,
     },
     /// List downloaded models in the local cache.
     List,
@@ -89,7 +95,16 @@ async fn main() -> Result<()> {
             temperature,
             top_k,
             top_p,
-        } => cmd_run(&model, &prompt, max_tokens, temperature, top_k, top_p),
+            tokenizer,
+        } => cmd_run(
+            &model,
+            &prompt,
+            max_tokens,
+            temperature,
+            top_k,
+            top_p,
+            tokenizer.as_deref(),
+        ),
         Command::List => cmd_list(),
         Command::Remove { model } => cmd_remove(&model),
         Command::Info { model } => cmd_info(&model),
@@ -121,37 +136,41 @@ fn cmd_pull(model: &str) {
     );
 }
 
-/// `beacon run` — load a model and (structurally) run inference.
-///
-/// In v0.1, this wires up the full code path — format loading, config
-/// printing, and conversion — but actual text generation requires a real
-/// model file and the full integration pipeline.
-fn cmd_run(
-    model: &str,
-    prompt: &str,
-    max_tokens: usize,
-    temperature: f32,
-    top_k: Option<usize>,
-    top_p: Option<f32>,
-) -> Result<()> {
-    let model_path = Path::new(model);
-
-    // --- Resolve model path -------------------------------------------------
-    if !model_path.exists() {
-        bail!(
-            "Model file not found: {}\n\n\
-             Hint: provide a path to a .gguf or .beacon file, e.g.:\n  \
-             beacon run /path/to/model.gguf \"Hello\"",
-            model_path.display()
-        );
+/// Locate the `tokenizer.json` file — either from an explicit path or by
+/// looking next to the model file.
+fn find_tokenizer(model_path: &Path, explicit: Option<&str>) -> Result<PathBuf> {
+    if let Some(p) = explicit {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            return Ok(path);
+        }
+        bail!("Tokenizer file not found: {p}");
     }
 
+    // Check next to the model file.
+    if let Some(dir) = model_path.parent() {
+        let candidate = dir.join("tokenizer.json");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    bail!(
+        "No tokenizer.json found next to {}.\n\
+         Use --tokenizer /path/to/tokenizer.json to specify one.",
+        model_path.display()
+    );
+}
+
+/// Load a `.gguf` or `.beacon` model file, performing GGUF-to-beacon
+/// conversion if needed.
+fn load_model(model_path: &Path) -> Result<beacon_format::BeaconFile> {
     let ext = model_path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
 
-    let beacon_file = match ext {
+    match ext {
         "gguf" => {
             eprintln!(
                 "{} Converting GGUF to .beacon format...",
@@ -170,11 +189,11 @@ fn cmd_run(
                 .context("failed to convert GGUF to .beacon")?;
 
             pb.finish_with_message("Conversion complete.");
-            bf
+            Ok(bf)
         }
         "beacon" => {
             eprintln!("{} Loading .beacon file...", "=>".green().bold());
-            beacon_format::BeaconFile::open(model_path).context("failed to open .beacon file")?
+            beacon_format::BeaconFile::open(model_path).context("failed to open .beacon file")
         }
         _ => {
             bail!(
@@ -182,9 +201,18 @@ fn cmd_run(
                  Beacon supports .gguf and .beacon files."
             );
         }
-    };
+    }
+}
 
-    // --- Print model info ---------------------------------------------------
+/// Print model info and generation parameters to stderr.
+fn print_run_header(
+    beacon_file: &beacon_format::BeaconFile,
+    prompt: &str,
+    max_tokens: usize,
+    temperature: f32,
+    top_k: Option<usize>,
+    top_p: Option<f32>,
+) {
     let cfg = &beacon_file.config;
     eprintln!();
     eprintln!("{}", "Model info".bold().underline());
@@ -197,7 +225,6 @@ fn cmd_run(
     eprintln!("  Tensors      : {}", beacon_file.tensors.len());
     eprintln!();
 
-    // --- Print generation params --------------------------------------------
     eprintln!("{}", "Generation parameters".bold().underline());
     eprintln!("  Prompt       : {}", prompt.cyan());
     eprintln!("  Max tokens   : {max_tokens}");
@@ -209,17 +236,150 @@ fn cmd_run(
         eprintln!("  Top-p        : {p}");
     }
     eprintln!();
+}
 
-    // --- Actual inference (structural for v0.1) -----------------------------
-    eprintln!(
-        "{} End-to-end inference is not yet wired in v0.1.",
-        "note:".yellow().bold()
-    );
-    eprintln!("  The model file was loaded and parsed successfully. Full text generation");
-    eprintln!("  (tokenize -> forward pass -> sampling -> decode) requires integration");
-    eprintln!("  testing with a real model, which is tracked as a follow-up.");
+/// Run the auto-regressive generation loop, printing tokens to stdout.
+fn generate(
+    engine: &mut beacon_core::Engine<beacon_core::MlxBackend>,
+    tokenizer: &beacon_tokenizer::BeaconTokenizer,
+    token_ids: &[u32],
+    params: &beacon_scheduler::GenerationParams,
+    eos_token_ids: &[u32],
+    vocab_size: usize,
+    max_tokens: usize,
+) -> Result<()> {
+    let mut rng = rand::rng();
 
+    // Prefill: forward the entire prompt at once.
+    let logits = engine
+        .forward(token_ids, 0)
+        .context("prefill forward pass failed")?;
+
+    // The logits tensor is [seq_len, vocab_size]. Read all, take the last row.
+    let all_logits = engine
+        .backend_ref()
+        .read_f32(&logits, token_ids.len() * vocab_size)
+        .context("failed to read prefill logits")?;
+
+    let last_row_start = (token_ids.len() - 1) * vocab_size;
+    let mut logit_values = all_logits[last_row_start..last_row_start + vocab_size].to_vec();
+
+    let mut prev_tokens = token_ids.to_vec();
+    let mut position = token_ids.len();
+
+    // Sample first generated token.
+    let mut next_token =
+        beacon_scheduler::sampling::sample(&mut logit_values, &prev_tokens, params, &mut rng);
+
+    if eos_token_ids.contains(&next_token) {
+        println!();
+        return Ok(());
+    }
+
+    if let Ok(text) = tokenizer.decode(&[next_token], true) {
+        print!("{text}");
+        std::io::stdout().flush()?;
+    }
+
+    // Auto-regressive decode loop.
+    for _ in 1..max_tokens {
+        let logits = engine
+            .forward(&[next_token], position)
+            .context("decode forward pass failed")?;
+        position += 1;
+
+        let mut logit_vals = engine
+            .backend_ref()
+            .read_f32(&logits, vocab_size)
+            .context("failed to read decode logits")?;
+
+        prev_tokens.push(next_token);
+        next_token =
+            beacon_scheduler::sampling::sample(&mut logit_vals, &prev_tokens, params, &mut rng);
+
+        if eos_token_ids.contains(&next_token) {
+            break;
+        }
+
+        if let Ok(text) = tokenizer.decode(&[next_token], true) {
+            print!("{text}");
+            std::io::stdout().flush()?;
+        }
+    }
+
+    println!(); // Final newline.
     Ok(())
+}
+
+/// `beacon run` — load a model and run end-to-end text generation.
+#[allow(clippy::too_many_arguments)]
+fn cmd_run(
+    model: &str,
+    prompt: &str,
+    max_tokens: usize,
+    temperature: f32,
+    top_k: Option<usize>,
+    top_p: Option<f32>,
+    tokenizer_path: Option<&str>,
+) -> Result<()> {
+    let model_path = Path::new(model);
+
+    if !model_path.exists() {
+        bail!(
+            "Model file not found: {}\n\n\
+             Hint: provide a path to a .gguf or .beacon file, e.g.:\n  \
+             beacon run /path/to/model.gguf \"Hello\"",
+            model_path.display()
+        );
+    }
+
+    let beacon_file = load_model(model_path)?;
+    print_run_header(&beacon_file, prompt, max_tokens, temperature, top_k, top_p);
+
+    // Find and load tokenizer.
+    let tok_path = find_tokenizer(model_path, tokenizer_path)?;
+    eprintln!(
+        "{} Loading tokenizer from {}",
+        "=>".green().bold(),
+        tok_path.display()
+    );
+    let tokenizer = beacon_tokenizer::BeaconTokenizer::from_file(&tok_path)
+        .context("failed to load tokenizer")?;
+
+    // Create MLX backend + engine.
+    eprintln!("{} Loading model weights...", "=>".green().bold());
+    let ctx = Arc::new(beacon_mlx::MlxContext::new().context("failed to create MLX context")?);
+    let backend = beacon_core::MlxBackend::new(Arc::clone(&ctx));
+    let mut engine =
+        beacon_core::Engine::load(&beacon_file, backend).context("failed to load engine")?;
+
+    // Encode prompt.
+    let token_ids = tokenizer
+        .encode(prompt, false)
+        .context("failed to encode prompt")?;
+    eprintln!("  Prompt tokens: {}", token_ids.len());
+    eprintln!();
+
+    // Build sampling parameters.
+    let cfg = &beacon_file.config;
+    let params = beacon_scheduler::GenerationParams {
+        max_tokens,
+        temperature,
+        top_k,
+        top_p,
+        stop_tokens: cfg.eos_token_ids.clone(),
+        ..beacon_scheduler::GenerationParams::default()
+    };
+
+    generate(
+        &mut engine,
+        &tokenizer,
+        &token_ids,
+        &params,
+        &cfg.eos_token_ids,
+        cfg.vocab_size,
+        max_tokens,
+    )
 }
 
 /// `beacon list` — enumerate `.beacon` files in the local cache.

@@ -261,6 +261,67 @@ impl ComputeBackend for CpuBackend {
         })
     }
 
+    #[allow(clippy::cast_sign_loss)]
+    fn swapaxes(
+        &self,
+        _stream: &Self::Stream,
+        x: &Self::Tensor,
+        axis1: i32,
+        axis2: i32,
+    ) -> Result<Self::Tensor, EngineError> {
+        let ndim = x.shape.len();
+        let a1 = if axis1 < 0 {
+            ndim as i32 + axis1
+        } else {
+            axis1
+        } as usize;
+        let a2 = if axis2 < 0 {
+            ndim as i32 + axis2
+        } else {
+            axis2
+        } as usize;
+        if a1 >= ndim || a2 >= ndim {
+            return Err(EngineError::ShapeMismatch(
+                "swapaxes: axis out of range".into(),
+            ));
+        }
+        if a1 == a2 {
+            return Ok(x.clone());
+        }
+        let mut new_shape = x.shape.clone();
+        new_shape.swap(a1, a2);
+        // Build permutation and strides
+        let mut perm: Vec<usize> = (0..ndim).collect();
+        perm.swap(a1, a2);
+        let mut old_strides = vec![1usize; ndim];
+        for i in (0..ndim - 1).rev() {
+            old_strides[i] = old_strides[i + 1] * dim(x.shape[i + 1]);
+        }
+        let mut new_strides = vec![1usize; ndim];
+        for i in (0..ndim - 1).rev() {
+            new_strides[i] = new_strides[i + 1] * dim(new_shape[i + 1]);
+        }
+        let total = x.data.len();
+        let mut new_data = vec![0.0f32; total];
+        for flat_idx in 0..total {
+            let mut remaining = flat_idx;
+            let mut old_coords = [0usize; 8]; // max 8 dims
+            for d in 0..ndim {
+                old_coords[d] = remaining / old_strides[d];
+                remaining %= old_strides[d];
+            }
+            let mut new_flat = 0;
+            for d in 0..ndim {
+                new_flat += old_coords[perm[d]] * new_strides[d];
+            }
+            new_data[new_flat] = x.data[flat_idx];
+        }
+        Ok(CpuTensor {
+            data: new_data,
+            shape: new_shape,
+        })
+    }
+
     #[allow(clippy::many_single_char_names)]
     fn transpose(
         &self,

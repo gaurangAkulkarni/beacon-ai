@@ -171,6 +171,13 @@ int32_t beacon_op_transpose(
     const BeaconTensor* x,
     BeaconTensor** out);
 
+// Swap two axes of a tensor.
+int32_t beacon_op_swapaxes(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* x,
+    int32_t axis1, int32_t axis2,
+    BeaconTensor** out);
+
 // Embedding lookup: select rows from a weight matrix by index.
 // weight: [vocab_size, hidden_dim], indices: [seq_len] (int32)
 // out: [seq_len, hidden_dim]

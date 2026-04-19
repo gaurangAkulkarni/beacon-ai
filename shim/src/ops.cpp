@@ -292,8 +292,11 @@ int32_t beacon_op_kv_cache_update(
             return BEACON_ERR_INVALID_ARGUMENT;
         }
         const int32_t pos = static_cast<int32_t>(position);
+        // new_k/v may be [seq_len, heads, dim] for prefill or [1, heads, dim]
+        // for single-token decode.
+        const auto seq_len = static_cast<int32_t>(new_k->arr.shape()[0]);
         mlx::core::Shape start_k = {pos, 0, 0};
-        mlx::core::Shape stop_k = {pos + 1, n_heads, head_dim};
+        mlx::core::Shape stop_k = {pos + seq_len, n_heads, head_dim};
         // slice_update is functional — returns a new array with the slot
         // written. Replacing the cache_k/v array handle does not copy memory;
         // MLX reuses the underlying storage when possible.
@@ -301,9 +304,9 @@ int32_t beacon_op_kv_cache_update(
             cache_k->arr, new_k->arr, start_k, stop_k, stream->stream);
         cache_v->arr = mlx::core::slice_update(
             cache_v->arr, new_v->arr, start_k, stop_k, stream->stream);
-        // Return views over [0..=position] for attention.
+        // Return views over [0..position+seq_len] for attention.
         mlx::core::Shape view_start = {0, 0, 0};
-        mlx::core::Shape view_stop = {pos + 1, n_heads, head_dim};
+        mlx::core::Shape view_stop = {pos + seq_len, n_heads, head_dim};
         auto k_view = mlx::core::slice(
             cache_k->arr, view_start, view_stop, stream->stream);
         auto v_view = mlx::core::slice(
@@ -362,6 +365,27 @@ int32_t beacon_op_transpose(
             static_cast<int>(ndim - 2),
             static_cast<int>(ndim - 1),
             stream->stream);
+        *out = box_result(std::move(result));
+        return BEACON_OK;
+#endif
+    });
+}
+
+int32_t beacon_op_swapaxes(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* x,
+    int32_t axis1, int32_t axis2,
+    BeaconTensor** out) {
+    return beacon::guard([&]() -> int32_t {
+        if (any_null({ctx, stream, x, out})) {
+            beacon::set_error_message("beacon_op_swapaxes: null argument");
+            return BEACON_ERR_INVALID_ARGUMENT;
+        }
+#ifdef BEACON_NO_MLX
+        return BEACON_ERR_UNKNOWN;
+#else
+        auto result = mlx::core::swapaxes(
+            x->arr, axis1, axis2, stream->stream);
         *out = box_result(std::move(result));
         return BEACON_OK;
 #endif

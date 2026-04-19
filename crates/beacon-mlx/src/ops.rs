@@ -238,6 +238,22 @@ pub fn transpose(stream: &MlxStream, x: &MlxTensor) -> Result<MlxTensor, MlxErro
     Ok(MlxTensor::from_raw(ctx, out))
 }
 
+/// Swap two axes of a tensor.
+pub fn swapaxes(
+    stream: &MlxStream,
+    x: &MlxTensor,
+    axis1: i32,
+    axis2: i32,
+) -> Result<MlxTensor, MlxError> {
+    let ctx = Arc::clone(&x.ctx);
+    let mut out: *mut ffi::BeaconTensor = std::ptr::null_mut();
+    let status = unsafe {
+        ffi::beacon_op_swapaxes(ctx.inner, stream.inner, x.inner, axis1, axis2, &raw mut out)
+    };
+    status_to_result(status)?;
+    Ok(MlxTensor::from_raw(ctx, out))
+}
+
 /// Embedding lookup: select rows from `weight` by `indices`.
 ///
 /// `weight`: `[vocab_size, hidden_dim]`, `indices`: `[seq_len]` (i32).

@@ -129,6 +129,11 @@ impl Engine<CpuBackend> {
 }
 
 impl<B: ComputeBackend> Engine<B> {
+    /// Access the compute backend (e.g. for reading tensor data via `read_f32`).
+    pub fn backend_ref(&self) -> &B {
+        &self.backend
+    }
+
     /// Run the full transformer forward pass on a sequence of tokens.
     ///
     /// Returns the logits tensor. `position` is the starting position in the
@@ -242,44 +247,42 @@ impl<B: ComputeBackend> Engine<B> {
         let k = self.backend.matmul(stream, hidden, &attn.k_proj)?;
         let v = self.backend.matmul(stream, hidden, &attn.v_proj)?;
 
-        // Reshape for multi-head attention:
-        // q: [seq, hidden] -> [1, n_heads, seq, head_dim]
-        // k,v: [seq, hidden] -> [1, n_kv_heads, seq, head_dim]
+        // Reshape + transpose for multi-head attention.
+        // After matmul: q=[seq, num_heads*head_dim], k/v=[seq, num_kv_heads*head_dim]
+        // Target: q=[1, num_heads, seq, head_dim], k/v=[1, num_kv_heads, seq, head_dim]
+        //
+        // Step 1: reshape to [1, seq, heads, dim]
+        // Step 2: swapaxes(1, 2) to get [1, heads, seq, dim]
         let q = self.backend.reshape(
             stream,
             &q,
             &[1, seq_len as i64, cfg.num_heads as i64, cfg.head_dim as i64],
         )?;
-        // Note: a proper transpose [1,seq,heads,dim] -> [1,heads,seq,dim] is
-        // needed here. For v0.1, we use reshape which assumes contiguous layout.
-        // TODO: add transpose op to the backend trait for correct multi-head layout.
-        let q = self.backend.reshape(
-            stream,
-            &q,
-            &[1, cfg.num_heads as i64, seq_len as i64, cfg.head_dim as i64],
-        )?;
+        let q = self.backend.swapaxes(stream, &q, 1, 2)?;
 
         let k = self.backend.reshape(
             stream,
             &k,
             &[
                 1,
-                cfg.num_kv_heads as i64,
                 seq_len as i64,
+                cfg.num_kv_heads as i64,
                 cfg.head_dim as i64,
             ],
         )?;
+        let k = self.backend.swapaxes(stream, &k, 1, 2)?;
 
         let v = self.backend.reshape(
             stream,
             &v,
             &[
                 1,
-                cfg.num_kv_heads as i64,
                 seq_len as i64,
+                cfg.num_kv_heads as i64,
                 cfg.head_dim as i64,
             ],
         )?;
+        let v = self.backend.swapaxes(stream, &v, 1, 2)?;
 
         // RoPE on Q and K.
         let q = self.backend.rope(
@@ -345,7 +348,9 @@ impl<B: ComputeBackend> Engine<B> {
             .backend
             .attention(stream, &q, &k_full, &v_full, None, scale)?;
 
-        // Reshape attention output back to [seq, hidden].
+        // Attention output is [1, heads, seq, dim]. Swap back to [1, seq, heads, dim]
+        // then reshape to [seq, hidden].
+        let attn_out = self.backend.swapaxes(stream, &attn_out, 1, 2)?;
         let attn_out =
             self.backend
                 .reshape(stream, &attn_out, &[seq_len as i64, cfg.hidden_size as i64])?;

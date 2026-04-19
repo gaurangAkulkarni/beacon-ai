@@ -168,11 +168,13 @@ dependencies = [
  "anyhow",
  "beacon-core",
  "beacon-format",
+ "beacon-mlx",
  "beacon-scheduler",
  "beacon-tokenizer",
  "clap",
  "indicatif",
  "owo-colors",
+ "rand",
  "tokio",
 ]
 

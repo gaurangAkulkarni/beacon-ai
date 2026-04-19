@@ -134,6 +134,16 @@ impl ComputeBackend for MlxBackend {
         beacon_mlx::ops::reshape(stream, x, shape).map_err(EngineError::from)
     }
 
+    fn swapaxes(
+        &self,
+        stream: &Self::Stream,
+        x: &Self::Tensor,
+        axis1: i32,
+        axis2: i32,
+    ) -> Result<Self::Tensor, EngineError> {
+        Ok(beacon_mlx::ops::swapaxes(stream, x, axis1, axis2)?)
+    }
+
     fn transpose(
         &self,
         stream: &Self::Stream,

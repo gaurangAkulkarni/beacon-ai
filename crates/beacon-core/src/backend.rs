@@ -109,6 +109,15 @@ pub trait ComputeBackend {
         shape: &[i64],
     ) -> Result<Self::Tensor, EngineError>;
 
+    /// Swap two axes of a tensor.
+    fn swapaxes(
+        &self,
+        stream: &Self::Stream,
+        x: &Self::Tensor,
+        axis1: i32,
+        axis2: i32,
+    ) -> Result<Self::Tensor, EngineError>;
+
     /// Transpose the last two dimensions of a tensor.
     fn transpose(
         &self,
