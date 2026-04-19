@@ -8,8 +8,9 @@ This file is automatically read by Claude Code at the start of every session. It
 
 1. **`README.md`** — product vision, build sequence, success criteria for each step.
 2. **`docs/architecture.md`** — authoritative technical specification. When the README says *what*, this document says *how*.
+3. **`docs/BUILD_STATUS.md`** — current project state: which steps are done, which is in progress, what's deferred, and the log of key decisions. This file is the single source of truth for "where are we?" when switching between Claude environments (Desktop, CLI, web, IDE).
 
-**Do not write code before reading both files in full.** If a task references "Step N" of the build sequence, locate that step in the README, then read the architecture section it cross-references before implementing.
+**Do not write code before reading all three files in full.** If a task references "Step N" of the build sequence, locate that step in the README, then read the architecture section it cross-references before implementing. Cross-check `BUILD_STATUS.md` so you do not re-do already-completed work or skip a blocker.
 
 ---
 
@@ -20,6 +21,7 @@ This file is automatically read by Claude Code at the start of every session. It
 - Work one build step at a time. Do not skip ahead.
 - Before starting a step, restate the step's success criteria and the architecture sections it depends on.
 - When a step is complete, verify the success criteria pass. Do not advance to the next step until they do.
+- **Update `docs/BUILD_STATUS.md` at the end of every step** — flip the step's status to ✅, tick verified success criteria, update the "Current step" section at the top, add any new decisions to the log, and commit it with the step's code. This file keeps Claude Desktop, Claude CLI, and any other client in sync about project state.
 - If you believe a step's spec is wrong or incomplete, stop and raise it — do not silently improvise.
 
 ### Authoritative sources (in order)
@@ -48,9 +50,20 @@ If an approach would violate any of these, stop and flag it rather than proceedi
 
 ### Commits
 
-- One commit per logical change.
-- Commit messages: imperative mood, reference the build step (e.g., "Step 2: add MLX tensor creation to shim").
-- Do not mix steps within a single commit.
+This section applies to every Claude environment (Desktop, CLI, web, IDE). Follow it verbatim so history stays clean across handoffs.
+
+- **One commit per logical change.** A logical change is one step's worth of work, or one infra/tooling change, or one doc change — never a mix.
+- **Do not mix steps within a single commit.** If Step 2's work touched shared files (`.gitignore`, `.github/workflows/ci.yml`, `Cargo.toml`, etc.) that Step 1 also touched, stage only the Step-1 delta for Step 1's commit and the Step-2 delta for Step 2's commit. Use `git add -p` or targeted `git add <path>` plus on-the-fly edits if needed — do not shove the whole final file into the earlier commit.
+- **Each commit must build standalone.** Anyone checking out any commit should get a tree where the step's success criteria pass. This keeps `git bisect` useful.
+- **Commit messages:** imperative mood, reference the build step in the subject. Examples:
+  - `Step 1: scaffold Cargo workspace with stub crates and CI`
+  - `Step 2: add MLX shim C ABI and CMake build`
+  - `docs: introduce BUILD_STATUS.md as cross-session state`
+  - `ci: enable Metal Toolchain download on macos-14`
+- **Update `docs/BUILD_STATUS.md` as part of the step's commit.** When a step completes, flip the status, tick verified criteria, update "Current step", and log new decisions — all in the same commit as the step's code. Exception: the one-time introduction of `BUILD_STATUS.md` itself is its own commit.
+- **Never commit unless the user explicitly asks.** Do not commit at end-of-step by default; surface a summary and wait for "commit this" (or equivalent).
+- **Do not skip hooks** (`--no-verify`, `--no-gpg-sign`) unless the user explicitly asks. If a hook fails, fix the underlying issue and make a new commit.
+- **Do not amend published commits.** After a push, roll forward with a new commit rather than rewriting history.
 
 ### Tool and library choices
 
@@ -87,12 +100,12 @@ These are decided; do not propose alternatives without strong reason:
 
 On every new session, your first response must:
 
-1. Confirm you have read `README.md` and `docs/architecture.md`.
-2. State the current build step you understand us to be on.
+1. Confirm you have read `README.md`, `docs/architecture.md`, and `docs/BUILD_STATUS.md`.
+2. State the current build step (per `docs/BUILD_STATUS.md` → "Current step").
 3. State the specific task the user is asking you to perform.
 4. Then proceed with the task.
 
-If any of (1)-(3) is unclear, ask before writing code.
+If any of (1)-(3) is unclear, ask before writing code. If `docs/BUILD_STATUS.md` is missing or stale (e.g., its "Current step" does not match what the working tree and `git log` suggest), flag the discrepancy before proceeding — treat the codebase and git history as ground truth and ask the user how to reconcile.
 
 ---
 
