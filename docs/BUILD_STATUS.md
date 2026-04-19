@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 5 — Tokenizer (`beacon-tokenizer` crate).**
+**Next up: Step 6 — CPU kernels (`beacon-kernels` crate).**
 
-Steps 1–4 complete and committed. All locally verified on macOS ARM64.
+Steps 1–5 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -212,14 +212,50 @@ Architecture reference: [§9 Model Format (.beacon)](architecture.md#9-model-for
 
 ---
 
-### Steps 5 – 15 ⏳ not started
+### Step 5 — Tokenizer ✅ complete
+
+Architecture reference: [§10 Tokenizer](architecture.md#10-tokenizer-beacon-tokenizer).
+
+**Success criteria:**
+- [x] Token-for-token match with HuggingFace `tokenizers` (by wrapping the
+  same Rust crate)
+- [ ] 10k-sample corpus verification across all four families (requires real
+  `tokenizer.json` files; gated behind `BEACON_TEST_TOKENIZER` env var)
+
+**Delivered:**
+- `BeaconTokenizer` wrapping HuggingFace `tokenizers::Tokenizer` — load from
+  `tokenizer.json` file or in-memory bytes, encode/decode, token↔ID lookup.
+- Chat template rendering via `minijinja` — `apply_chat_template` with
+  `messages`, `bos_token`, `eos_token`, `add_generation_prompt` variables.
+- `ChatMessage` struct (role + content) with serde support.
+- `TokenizerError` enum.
+- Dependencies: `tokenizers` (0.22, HuggingFace), `minijinja` (2),
+  `thiserror`, `serde` (derive), `serde_json`.
+
+**Local verification (macOS ARM64):**
+- `cargo build -p beacon-tokenizer` — clean
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-tokenizer --all-targets -- -D warnings` — clean
+- `cargo test -p beacon-tokenizer` — 8/8 passed, 1 ignored
+- `cargo build --workspace --all-targets` — clean
+
+**Tests:**
+- Load tokenizer from JSON bytes
+- Encode/decode round-trip
+- Token↔ID lookup
+- Chat template: basic, no-generation-prompt, multi-turn, special tokens
+- No-template error case
+- `#[ignore]` real tokenizer test gated behind `BEACON_TEST_TOKENIZER` env var
+
+---
+
+### Steps 6 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 5 | Tokenizer | §10 | not started |
 | 6 | CPU kernels | §5, §6.2 | not started |
 | 7 | Transformer forward pass on MLX | §7, §8 | not started |
 | 8 | Transformer forward pass on CPU | §5 | not started |
@@ -273,6 +309,8 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | Pure Rust GGUF parser (no gguflib FFI) | Aligns with "Rust for everything except MLX". Cross-platform, no C dependency for format parsing. |
 | 2026-04-19 | `ModelConfig` defined in `beacon-format`, not `beacon-core` | Natural dependency direction: `beacon-core` depends on `beacon-format` for model loading. Avoids circular dependency. |
 | 2026-04-19 | GGUF tokenizer metadata stored as JSON blob in `.beacon` header | Step 5 (tokenizer) will define the exact consumption schema. Best-effort serialisation of all `tokenizer.ggml.*` keys now. |
+| 2026-04-19 | Wrap HuggingFace `tokenizers` crate rather than reimplementing BPE | Architecture §10 prescribes this approach. Guarantees token-for-token match by construction. |
+| 2026-04-19 | Chat templates via `minijinja` | Jinja2-subset rendering matching HuggingFace `tokenizer_config.json` chat_template format. |
 
 ---
 
