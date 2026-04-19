@@ -12,11 +12,9 @@
 
 ## Current step
 
-**Next up: Step 3 — MLX Rust bindings (`beacon-mlx` crate).**
+**Next up: Step 4 — Model format + GGUF import (`beacon-format` crate).**
 
-Steps 1 and 2 complete and locally verified on macOS ARM64. Nothing is
-committed to git yet — the working tree contains the Step 1 + Step 2 changes
-as untracked/modified files.
+Steps 1–3 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -115,14 +113,61 @@ Architecture reference: [§3 The Shim (C++ Layer)](architecture.md#3-the-shim-c-
 
 ---
 
-### Steps 3 – 15 ⏳ not started
+### Step 3 — MLX Rust bindings ✅ complete
+
+Architecture reference: [§4 Rust FFI Layer](architecture.md#4-rust-ffi-layer-beacon-mlx).
+
+**Success criteria:**
+- [x] Rust test creates MLX tensors, performs matmul, gets correct results
+
+**Delivered:**
+- `crates/beacon-mlx/build.rs` — builds shim via `cmake` crate, generates FFI
+  via `bindgen` from `shim/include/beacon_shim.h`, links MLX + system
+  frameworks (Metal, Foundation, QuartzCore, Accelerate).
+- `crates/beacon-mlx/src/context.rs` — `MlxContext` (RAII, `Send+Sync`,
+  create once per process).
+- `crates/beacon-mlx/src/stream.rs` — `MlxStream` (execution stream, RAII).
+- `crates/beacon-mlx/src/tensor.rs` — `MlxTensor` (from_mmap zero-copy,
+  zeros, shape/dtype introspection, eval, read_f32, RAII).
+- `crates/beacon-mlx/src/dtype.rs` — `Dtype` enum mapping `BeaconDtype`
+  (F32, F16, BF16, I32, I8, Q4_0, Q4_K, Q5_K, Q6_K, Q8_0).
+- `crates/beacon-mlx/src/error.rs` — `MlxError` enum + `status_to_result()`
+  translating `BeaconStatus` codes to Rust errors.
+- `crates/beacon-mlx/src/ops.rs` — 11 ops as free functions: matmul,
+  quantized_matmul, rms_norm, rope, silu, softmax, attention, add,
+  elementwise_mul, kv_cache_update, kernel_q4_dequant_mul.
+- `crates/beacon-mlx/src/tests.rs` — 4 tests: matmul correctness, zeros
+  readback, element-wise add, SiLU activation.
+- Dependencies added: `thiserror`, `memmap2`, `bindgen` (build), `cmake`
+  (build), `tempfile` (dev).
+
+**Local verification (macOS ARM64):**
+- `cargo build -p beacon-mlx` — clean
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-mlx --all-targets -- -D warnings` — clean
+- `cargo test -p beacon-mlx` — 4/4 passed
+- `cargo build --workspace --all-targets` — clean
+
+**Design decisions recorded:**
+- Tests serialised via `Mutex` because MLX's Metal backend has global state
+  that is not safe to access concurrently from multiple OS threads creating
+  separate contexts. In production, a single `MlxContext` is created per
+  process per the architecture spec (§4.1).
+- Test tensors created via `from_mmap` with tempfile-backed mmap to exercise
+  the real production path (zero-copy mmap → MLX tensor).
+- `build.rs` uses `cmake::Config::build_target("beacon_shim")` instead of
+  the default install target, since the shim CMakeLists.txt has no install
+  rules; libraries are found in the cmake build output directory.
+
+---
+
+### Steps 4 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 3 | MLX Rust bindings (`beacon-mlx`) | §4 | not started |
 | 4 | Model format + GGUF import | §9 | not started |
 | 5 | Tokenizer | §10 | not started |
 | 6 | CPU kernels | §5, §6.2 | not started |
@@ -173,6 +218,8 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | CI shim build uses `-DBEACON_SHIM_ENABLE_METAL=ON` with explicit `xcodebuild -downloadComponent MetalToolchain` step | Metal is the primary MLX path. The download is idempotent and cheap on GitHub's macOS runners; better to exercise GPU from day one than debug a Metal-off→on switch at Step 7. |
 | 2026-04-19 | Quantized dtypes stored as packed `uint32` MLX arrays | Matches MLX's own `quantize()`/`quantized_matmul()` representation; `BeaconTensor.logical_dtype` preserves the original BeaconDtype for introspection. |
 | 2026-04-19 | `beacon_kernel_q4_dequant_mul` returns `BEACON_ERR_UNKNOWN` in v0.1 | Custom Metal kernel is scoped to Step 6 / v0.2. ABI surface is present; callers fall back to `beacon_op_quantized_matmul`. |
+| 2026-04-19 | MLX tests serialised via `Mutex` | MLX Metal backend has global state unsafe for concurrent multi-context access. Architecture specifies one `MlxContext` per process; tests honour this with a shared lock. |
+| 2026-04-19 | `build.rs` uses `cmake::Config::build_target()` instead of install | Shim CMakeLists.txt has no install rules; the cmake crate's default `--target install` would fail. Using `build_target("beacon_shim")` and searching `out/build/` for the static libraries. |
 
 ---
 
