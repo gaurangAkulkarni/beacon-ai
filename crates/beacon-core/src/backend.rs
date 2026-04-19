@@ -28,13 +28,14 @@ pub trait ComputeBackend {
         b: &Self::Tensor,
     ) -> Result<Self::Tensor, EngineError>;
 
-    /// Quantized matrix multiplication: `out = x @ dequant(w, scales)`.
+    /// Quantized matrix multiplication: `out = x @ dequant(w, scales, biases)`.
     fn quantized_matmul(
         &self,
         stream: &Self::Stream,
         x: &Self::Tensor,
         w: &Self::Tensor,
         scales: &Self::Tensor,
+        biases: Option<&Self::Tensor>,
         group_size: i32,
         bits: i32,
     ) -> Result<Self::Tensor, EngineError>;

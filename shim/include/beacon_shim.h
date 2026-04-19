@@ -95,7 +95,8 @@ int32_t beacon_op_matmul(
 
 int32_t beacon_op_quantized_matmul(
     BeaconContext* ctx, BeaconStream* stream,
-    const BeaconTensor* x, const BeaconTensor* w_quantized, const BeaconTensor* scales,
+    const BeaconTensor* x, const BeaconTensor* w_quantized,
+    const BeaconTensor* scales, const BeaconTensor* biases,  // biases nullable
     int32_t group_size, int32_t bits,
     BeaconTensor** out);
 
@@ -184,6 +185,30 @@ int32_t beacon_op_swapaxes(
 int32_t beacon_op_embedding(
     BeaconContext* ctx, BeaconStream* stream,
     const BeaconTensor* weight, const BeaconTensor* indices,
+    BeaconTensor** out);
+
+// === Quantization ===
+// Quantize a float matrix into MLX's internal quantized format.
+// Returns three tensors: packed weights (uint32), scales (float16), biases (float16).
+// The input tensor w must be float16 or float32 with shape [rows, cols].
+int32_t beacon_op_quantize(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* w,
+    int32_t group_size, int32_t bits,
+    BeaconTensor** out_packed, BeaconTensor** out_scales, BeaconTensor** out_biases);
+
+// === GGUF dequantization ===
+// Dequantize raw GGUF quantized bytes to an F32 tensor using gguflib.
+// gguf_type: GGUF tensor type ID (2=Q4_0, 8=Q8_0, 12=Q4_K, etc.)
+// data: raw quantized bytes
+// data_len: byte length of the data
+// shape: desired output shape (row-major)
+// ndim: number of dimensions
+int32_t beacon_op_dequantize_gguf(
+    BeaconContext* ctx, BeaconStream* stream,
+    const void* data, size_t data_len,
+    int32_t gguf_type, uint64_t num_elements,
+    const int64_t* shape, size_t ndim,
     BeaconTensor** out);
 
 // === Custom kernels (Metal) ===

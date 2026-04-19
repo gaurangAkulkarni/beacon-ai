@@ -20,16 +20,20 @@ pub fn matmul(stream: &MlxStream, a: &MlxTensor, b: &MlxTensor) -> Result<MlxTen
     Ok(MlxTensor::from_raw(ctx, out))
 }
 
-/// Quantized matrix multiplication: `out = x @ dequant(w, scales)`.
+/// Quantized matrix multiplication: `out = x @ dequant(w, scales, biases)`.
+///
+/// The `biases` parameter is optional — pass `None` for the legacy path.
 pub fn quantized_matmul(
     stream: &MlxStream,
     x: &MlxTensor,
     w: &MlxTensor,
     scales: &MlxTensor,
+    biases: Option<&MlxTensor>,
     group_size: i32,
     bits: i32,
 ) -> Result<MlxTensor, MlxError> {
     let ctx = Arc::clone(&x.ctx);
+    let biases_ptr = biases.map_or(std::ptr::null(), |b| b.inner.cast_const());
     let mut out: *mut ffi::BeaconTensor = std::ptr::null_mut();
     let status = unsafe {
         ffi::beacon_op_quantized_matmul(
@@ -38,6 +42,7 @@ pub fn quantized_matmul(
             x.inner,
             w.inner,
             scales.inner,
+            biases_ptr,
             group_size,
             bits,
             &raw mut out,
@@ -45,6 +50,85 @@ pub fn quantized_matmul(
     };
     status_to_result(status)?;
     Ok(MlxTensor::from_raw(ctx, out))
+}
+
+/// Result of [`quantize`]: three tensors produced by MLX's `quantize()`.
+#[derive(Debug)]
+pub struct QuantizedTensors {
+    /// Packed weight data as uint32.
+    pub packed: MlxTensor,
+    /// Per-group scales.
+    pub scales: MlxTensor,
+    /// Per-group biases.
+    pub biases: MlxTensor,
+}
+
+/// Quantize a float matrix into MLX's internal quantized format.
+///
+/// Takes a `[rows, cols]` float tensor and returns packed weights, scales, and
+/// biases suitable for [`quantized_matmul`].
+pub fn quantize(
+    stream: &MlxStream,
+    w: &MlxTensor,
+    group_size: i32,
+    bits: i32,
+) -> Result<QuantizedTensors, MlxError> {
+    let ctx = Arc::clone(&w.ctx);
+    let mut out_packed: *mut ffi::BeaconTensor = std::ptr::null_mut();
+    let mut out_scales: *mut ffi::BeaconTensor = std::ptr::null_mut();
+    let mut out_biases: *mut ffi::BeaconTensor = std::ptr::null_mut();
+    let status = unsafe {
+        ffi::beacon_op_quantize(
+            ctx.inner,
+            stream.inner,
+            w.inner,
+            group_size,
+            bits,
+            &raw mut out_packed,
+            &raw mut out_scales,
+            &raw mut out_biases,
+        )
+    };
+    status_to_result(status)?;
+    Ok(QuantizedTensors {
+        packed: MlxTensor::from_raw(Arc::clone(&ctx), out_packed),
+        scales: MlxTensor::from_raw(Arc::clone(&ctx), out_scales),
+        biases: MlxTensor::from_raw(ctx, out_biases),
+    })
+}
+
+/// Dequantize raw GGUF quantized bytes to an F32 `MlxTensor` using gguflib.
+///
+/// `gguf_type` is the GGUF tensor type ID (2=`Q4_0`, 8=`Q8_0`, 12=`Q4_K`, etc.).
+/// The returned tensor has the given `shape` and dtype F32.
+#[allow(clippy::cast_possible_truncation)]
+pub fn dequantize_gguf(
+    stream: &MlxStream,
+    ctx: &std::sync::Arc<crate::MlxContext>,
+    data: &[u8],
+    gguf_type: u32,
+    num_elements: u64,
+    shape: &[i64],
+) -> Result<MlxTensor, MlxError> {
+    let mut out: *mut ffi::BeaconTensor = std::ptr::null_mut();
+    let status = unsafe {
+        ffi::beacon_op_dequantize_gguf(
+            ctx.inner,
+            stream.inner,
+            data.as_ptr().cast(),
+            data.len(),
+            #[allow(clippy::cast_possible_wrap)]
+            {
+                gguf_type as i32
+            },
+            num_elements,
+            shape.as_ptr(),
+            shape.len(),
+            &raw mut out,
+        )
+    };
+    status_to_result(status)?;
+    Ok(MlxTensor::from_raw(std::sync::Arc::clone(ctx), out))
 }
 
 /// RMS normalisation: `out = rms_norm(x, weight, eps)`.

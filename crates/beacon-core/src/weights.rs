@@ -2,7 +2,8 @@
 //!
 //! Weight tensors follow the `HuggingFace` naming convention for Llama-family
 //! models. Loading creates zero-copy `MlxTensor` handles backed by the file's
-//! mmap.
+//! mmap. Quantized GGUF weights are re-quantized into MLX's native format at
+//! load time so the forward pass can use `quantized_matmul` directly.
 
 use std::sync::Arc;
 
@@ -11,6 +12,29 @@ use beacon_mlx::{Dtype, MlxContext, MlxTensor};
 
 use crate::error::EngineError;
 
+/// A weight that may be plain (unquantized) or quantized in MLX's native format.
+///
+/// Plain weights use `transpose + matmul`; quantized weights use `quantized_matmul`
+/// which handles the transpose internally.
+#[derive(Debug)]
+pub enum ProjectionWeight<T> {
+    /// Unquantized — use `transpose + matmul` in the forward pass.
+    Plain(T),
+    /// Quantized via MLX's `quantize()` — use `quantized_matmul` in the forward pass.
+    Quantized {
+        /// Packed weight data (uint32).
+        packed: T,
+        /// Per-group scales.
+        scales: T,
+        /// Per-group biases.
+        biases: T,
+        /// Number of elements per quantization group.
+        group_size: i32,
+        /// Bits per weight element.
+        bits: i32,
+    },
+}
+
 /// Attention projection weights for a single transformer layer.
 ///
 /// The optional `q_bias`, `k_bias`, `v_bias` fields support models that have
@@ -18,10 +42,10 @@ use crate::error::EngineError;
 /// `LLaMA`) leave these as `None`.
 #[derive(Debug)]
 pub struct AttentionWeights<T> {
-    pub q_proj: T,
-    pub k_proj: T,
-    pub v_proj: T,
-    pub o_proj: T,
+    pub q_proj: ProjectionWeight<T>,
+    pub k_proj: ProjectionWeight<T>,
+    pub v_proj: ProjectionWeight<T>,
+    pub o_proj: ProjectionWeight<T>,
     pub q_bias: Option<T>,
     pub k_bias: Option<T>,
     pub v_bias: Option<T>,
@@ -30,9 +54,9 @@ pub struct AttentionWeights<T> {
 /// FFN (feed-forward network) weights for a single transformer layer.
 #[derive(Debug)]
 pub struct FfnWeights<T> {
-    pub gate_proj: T,
-    pub up_proj: T,
-    pub down_proj: T,
+    pub gate_proj: ProjectionWeight<T>,
+    pub up_proj: ProjectionWeight<T>,
+    pub down_proj: ProjectionWeight<T>,
 }
 
 /// All weights for a single transformer layer.
@@ -58,7 +82,7 @@ pub struct ModelWeights {
     /// Final RMS norm weight.
     pub final_norm: MlxTensor,
     /// Language model head (output projection).
-    pub lm_head: MlxTensor,
+    pub lm_head: ProjectionWeight<MlxTensor>,
 }
 
 /// Convert a `BeaconDtype` to the MLX `Dtype`.
@@ -137,6 +161,49 @@ fn hf_to_gguf_name(hf_name: &str) -> String {
     hf_name.to_owned()
 }
 
+/// Map `BeaconDtype` to the GGUF tensor type ID for the shim's dequantizer.
+fn beacon_dtype_to_gguf_type(dt: beacon_format::BeaconDtype) -> u32 {
+    match dt {
+        beacon_format::BeaconDtype::Q4_0 => 2,
+        beacon_format::BeaconDtype::Q4_1 => 3,
+        beacon_format::BeaconDtype::Q5_0 => 6,
+        beacon_format::BeaconDtype::Q5_1 => 7,
+        beacon_format::BeaconDtype::Q8_0 => 8,
+        beacon_format::BeaconDtype::Q2K => 10,
+        beacon_format::BeaconDtype::Q3K => 11,
+        beacon_format::BeaconDtype::Q4K => 12,
+        beacon_format::BeaconDtype::Q5K => 13,
+        beacon_format::BeaconDtype::Q6K => 14,
+        beacon_format::BeaconDtype::Q8K => 15,
+        _ => 0, // F32 fallback (shouldn't reach here)
+    }
+}
+
+/// Re-quantize an F16 tensor into MLX's native quantized format.
+///
+/// If quantization succeeds, returns `Quantized`; if it fails (e.g. the tensor
+/// is too small for the given group size), falls back to `Plain`.
+fn quantize_to_mlx(
+    ctx: &Arc<MlxContext>,
+    tensor: MlxTensor,
+    group_size: i32,
+    bits: i32,
+) -> ProjectionWeight<MlxTensor> {
+    let Ok(stream) = ctx.new_stream() else {
+        return ProjectionWeight::Plain(tensor);
+    };
+    match beacon_mlx::ops::quantize(&stream, &tensor, group_size, bits) {
+        Ok(qt) => ProjectionWeight::Quantized {
+            packed: qt.packed,
+            scales: qt.scales,
+            biases: qt.biases,
+            group_size,
+            bits,
+        },
+        Err(_) => ProjectionWeight::Plain(tensor),
+    }
+}
+
 /// Create an `MlxTensor` from a tensor metadata entry in a beacon file.
 ///
 /// For non-quantized tensors (F16, F32, etc.), the tensor is backed by the
@@ -156,34 +223,18 @@ fn load_tensor(
     let shape: Vec<i64> = meta.shape.iter().map(|&d| d as i64).collect();
 
     if beacon_format::dequant::is_quantized(meta.dtype) {
-        // Dequantize: read raw quantized bytes, expand to F16, store in
-        // anonymous mmap, and create an MlxTensor with Dtype::F16.
+        // Dequantize via the C shim's gguflib-based dequant (battle-tested).
+        // This produces an F32 MlxTensor directly, bypassing the buggy Rust
+        // K-quant dequant code.
         let mmap = beacon.mmap();
         let offset = meta.data_offset as usize;
         let data_len = meta.data_length as usize;
         let raw_data = &mmap[offset..offset + data_len];
         let num_elements = meta.num_elements();
+        let gguf_type = beacon_dtype_to_gguf_type(meta.dtype);
 
-        let f16_data =
-            beacon_format::dequant::dequantize_to_f16(raw_data, meta.dtype, num_elements);
-
-        // Write f16 data into an anonymous mmap.
-        let byte_len = f16_data.len() * 2;
-        let mut mmap_mut = memmap2::MmapMut::map_anon(byte_len)
-            .map_err(|e| EngineError::Backend(format!("anonymous mmap failed: {e}")))?;
-
-        // Copy f16 values as little-endian u16 bytes.
-        for (i, &val) in f16_data.iter().enumerate() {
-            let off = i * 2;
-            mmap_mut[off..off + 2].copy_from_slice(&val.to_le_bytes());
-        }
-
-        let anon_mmap = mmap_mut
-            .make_read_only()
-            .map_err(|e| EngineError::Backend(format!("mmap make_read_only failed: {e}")))?;
-        let anon_mmap = Arc::new(anon_mmap);
-
-        MlxTensor::from_mmap(Arc::clone(ctx), anon_mmap, 0, &shape, Dtype::F16)
+        let stream = ctx.new_stream().map_err(EngineError::from)?;
+        beacon_mlx::ops::dequantize_gguf(&stream, ctx, raw_data, gguf_type, num_elements, &shape)
             .map_err(EngineError::from)
     } else {
         // Non-quantized: zero-copy from the file's mmap.
@@ -221,6 +272,30 @@ fn try_load_named(
     }
 }
 
+/// Load a named tensor and re-quantize it into MLX's native format.
+///
+/// This is used for all projection weights (Q/K/V/O projections, FFN gate/up/down,
+/// `lm_head`). The tensor is first loaded (dequantized to F16 if GGUF-quantized),
+/// then re-quantized via MLX's `quantize()` into packed uint32 + scales + biases.
+fn load_and_quantize(
+    beacon: &BeaconFile,
+    name: &str,
+    ctx: &Arc<MlxContext>,
+    group_size: i32,
+    bits: i32,
+) -> Result<ProjectionWeight<MlxTensor>, EngineError> {
+    let meta = find_tensor(beacon, name)?;
+    let tensor = load_tensor(beacon, meta, ctx)?;
+    // Only quantize if the original tensor was from a quantized GGUF type,
+    // meaning it was dequantized to F16 at load time. Non-quantized (native
+    // F16/F32) tensors are left plain because they are already in optimal form.
+    if beacon_format::dequant::is_quantized(meta.dtype) {
+        Ok(quantize_to_mlx(ctx, tensor, group_size, bits))
+    } else {
+        Ok(ProjectionWeight::Plain(tensor))
+    }
+}
+
 /// Load all model weights from a `.beacon` file.
 ///
 /// Tensor names follow `HuggingFace` conventions:
@@ -231,6 +306,10 @@ fn try_load_named(
 /// - `model.layers.{i}.post_attention_layernorm.weight`
 /// - `model.norm.weight`
 /// - `lm_head.weight`
+///
+/// Quantized GGUF weights (`Q4_K`, `Q4_0`, etc.) are first dequantized to F16,
+/// then re-quantized into MLX's native format (packed uint32 + scales + biases)
+/// so that the forward pass can use `quantized_matmul`.
 pub fn load_weights(
     beacon: &BeaconFile,
     ctx: &Arc<MlxContext>,
@@ -239,22 +318,68 @@ pub fn load_weights(
 ) -> Result<ModelWeights, EngineError> {
     let embed_tokens = load_named(beacon, "model.embed_tokens.weight", ctx)?;
 
+    // Default quantization parameters matching MLX defaults.
+    let group_size = 64;
+    let bits = 4;
+
     let mut layers = Vec::with_capacity(num_layers);
     for i in 0..num_layers {
         let prefix = format!("model.layers.{i}");
         let attn = AttentionWeights {
-            q_proj: load_named(beacon, &format!("{prefix}.self_attn.q_proj.weight"), ctx)?,
-            k_proj: load_named(beacon, &format!("{prefix}.self_attn.k_proj.weight"), ctx)?,
-            v_proj: load_named(beacon, &format!("{prefix}.self_attn.v_proj.weight"), ctx)?,
-            o_proj: load_named(beacon, &format!("{prefix}.self_attn.o_proj.weight"), ctx)?,
+            q_proj: load_and_quantize(
+                beacon,
+                &format!("{prefix}.self_attn.q_proj.weight"),
+                ctx,
+                group_size,
+                bits,
+            )?,
+            k_proj: load_and_quantize(
+                beacon,
+                &format!("{prefix}.self_attn.k_proj.weight"),
+                ctx,
+                group_size,
+                bits,
+            )?,
+            v_proj: load_and_quantize(
+                beacon,
+                &format!("{prefix}.self_attn.v_proj.weight"),
+                ctx,
+                group_size,
+                bits,
+            )?,
+            o_proj: load_and_quantize(
+                beacon,
+                &format!("{prefix}.self_attn.o_proj.weight"),
+                ctx,
+                group_size,
+                bits,
+            )?,
             q_bias: try_load_named(beacon, &format!("{prefix}.self_attn.q_proj.bias"), ctx)?,
             k_bias: try_load_named(beacon, &format!("{prefix}.self_attn.k_proj.bias"), ctx)?,
             v_bias: try_load_named(beacon, &format!("{prefix}.self_attn.v_proj.bias"), ctx)?,
         };
         let ffn = FfnWeights {
-            gate_proj: load_named(beacon, &format!("{prefix}.mlp.gate_proj.weight"), ctx)?,
-            up_proj: load_named(beacon, &format!("{prefix}.mlp.up_proj.weight"), ctx)?,
-            down_proj: load_named(beacon, &format!("{prefix}.mlp.down_proj.weight"), ctx)?,
+            gate_proj: load_and_quantize(
+                beacon,
+                &format!("{prefix}.mlp.gate_proj.weight"),
+                ctx,
+                group_size,
+                bits,
+            )?,
+            up_proj: load_and_quantize(
+                beacon,
+                &format!("{prefix}.mlp.up_proj.weight"),
+                ctx,
+                group_size,
+                bits,
+            )?,
+            down_proj: load_and_quantize(
+                beacon,
+                &format!("{prefix}.mlp.down_proj.weight"),
+                ctx,
+                group_size,
+                bits,
+            )?,
         };
         let attn_norm = load_named(beacon, &format!("{prefix}.input_layernorm.weight"), ctx)?;
         let ffn_norm = load_named(
@@ -276,12 +401,14 @@ pub fn load_weights(
     // When `tie_word_embeddings` is true, `lm_head` reuses `embed_tokens`.
     // Since we cannot cheaply clone an MlxTensor (it owns a raw pointer),
     // we load it again from the same mmap offset — this is zero-copy, just
-    // a new handle.
+    // a new handle. Tied embeddings are kept plain (not quantized) because
+    // the embedding table must also work with the `embedding` op.
     let lm_head = if tie_word_embeddings {
         let meta = find_tensor(beacon, "model.embed_tokens.weight")?;
-        load_tensor(beacon, meta, ctx)?
+        let tensor = load_tensor(beacon, meta, ctx)?;
+        ProjectionWeight::Plain(tensor)
     } else {
-        load_named(beacon, "lm_head.weight", ctx)?
+        load_and_quantize(beacon, "lm_head.weight", ctx, group_size, bits)?
     };
 
     Ok(ModelWeights {

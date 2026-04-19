@@ -13,7 +13,7 @@ use crate::cpu_backend::{CpuBackend, CpuTensor};
 use crate::error::EngineError;
 use crate::kv_cache::KvCache;
 use crate::mlx_backend::MlxBackend;
-use crate::weights::{load_weights, LayerWeights};
+use crate::weights::{load_weights, LayerWeights, ProjectionWeight};
 
 /// The inference engine.
 ///
@@ -28,7 +28,7 @@ pub struct Engine<B: ComputeBackend> {
     embed_tokens: B::Tensor,
     layers: Vec<LayerWeights<B::Tensor>>,
     final_norm: B::Tensor,
-    lm_head: B::Tensor,
+    lm_head: ProjectionWeight<B::Tensor>,
     cache: Vec<KvCache<B::Tensor>>,
 }
 
@@ -67,7 +67,7 @@ impl Engine<MlxBackend> {
             embed_tokens: weights.embed_tokens,
             layers: weights.layers,
             final_norm: weights.final_norm,
-            lm_head: weights.lm_head,
+            lm_head: weights.lm_head, // already a ProjectionWeight
             cache,
         })
     }
@@ -85,7 +85,7 @@ impl Engine<CpuBackend> {
         embed_tokens: CpuTensor,
         layers: Vec<LayerWeights<CpuTensor>>,
         final_norm: CpuTensor,
-        lm_head: CpuTensor,
+        lm_head: ProjectionWeight<CpuTensor>,
     ) -> Result<Self, EngineError> {
         let backend = CpuBackend;
 
@@ -132,6 +132,37 @@ impl<B: ComputeBackend> Engine<B> {
     /// Access the compute backend (e.g. for reading tensor data via `read_f32`).
     pub fn backend_ref(&self) -> &B {
         &self.backend
+    }
+
+    /// Dispatch a matrix multiply through either the plain (`transpose + matmul`)
+    /// or quantized (`quantized_matmul`) path depending on the weight type.
+    fn proj_matmul(
+        &self,
+        stream: &B::Stream,
+        x: &B::Tensor,
+        weight: &ProjectionWeight<B::Tensor>,
+    ) -> Result<B::Tensor, EngineError> {
+        match weight {
+            ProjectionWeight::Plain(w) => {
+                let w_t = self.backend.transpose(stream, w)?;
+                self.backend.matmul(stream, x, &w_t)
+            }
+            ProjectionWeight::Quantized {
+                packed,
+                scales,
+                biases,
+                group_size,
+                bits,
+            } => self.backend.quantized_matmul(
+                stream,
+                x,
+                packed,
+                scales,
+                Some(biases),
+                *group_size,
+                *bits,
+            ),
+        }
     }
 
     /// Reset all KV cache layers to empty (length 0).
@@ -191,12 +222,11 @@ impl<B: ComputeBackend> Engine<B> {
             self.backend.eval(&h, &stream)?;
         }
 
-        // 3. Final norm + lm_head matmul.
+        // 3. Final norm + lm_head projection.
         let h = self
             .backend
             .rms_norm(&stream, &h, &self.final_norm, self.config.rms_norm_eps)?;
-        let lm_head_t = self.backend.transpose(&stream, &self.lm_head)?;
-        let logits = self.backend.matmul(&stream, &h, &lm_head_t)?;
+        let logits = self.proj_matmul(&stream, &h, &self.lm_head)?;
         self.backend.eval(&logits, &stream)?;
 
         // Update KV cache positions.
@@ -231,10 +261,9 @@ impl<B: ComputeBackend> Engine<B> {
 
     /// Attention block for a single layer (architecture doc section 7.3).
     ///
-    /// In v0.1, all projections use regular `matmul` instead of
-    /// `quantized_matmul` because GGUF quantized weights are not in MLX's
-    /// internal quantization format. TODO: add `quantized_matmul` path once
-    /// the format bridge is in place.
+    /// Projections dispatch through `proj_matmul` which uses `quantized_matmul`
+    /// when the weight was re-quantized into MLX's native format, or falls back
+    /// to `transpose + matmul` for plain (unquantized) weights.
     #[allow(
         clippy::cast_possible_wrap,
         clippy::cast_possible_truncation,
@@ -252,27 +281,22 @@ impl<B: ComputeBackend> Engine<B> {
         let cfg = &self.config;
         let attn = &self.layers[layer_idx].attn;
 
-        // Q/K/V projections — use matmul for v0.1 (see doc comment above).
-        // Weights are [out_features, in_features] (standard convention after
-        // reversing GGUF dims). We need matmul(x, W.T) = matmul(x, [in, out]).
-        let q_w = self.backend.transpose(stream, &attn.q_proj)?;
-        let q = self.backend.matmul(stream, hidden, &q_w)?;
+        // Q/K/V projections — dispatched through proj_matmul.
+        let q = self.proj_matmul(stream, hidden, &attn.q_proj)?;
         let q = if let Some(ref bias) = attn.q_bias {
             self.backend.add(stream, &q, bias)?
         } else {
             q
         };
 
-        let k_w = self.backend.transpose(stream, &attn.k_proj)?;
-        let k = self.backend.matmul(stream, hidden, &k_w)?;
+        let k = self.proj_matmul(stream, hidden, &attn.k_proj)?;
         let k = if let Some(ref bias) = attn.k_bias {
             self.backend.add(stream, &k, bias)?
         } else {
             k
         };
 
-        let v_w = self.backend.transpose(stream, &attn.v_proj)?;
-        let v = self.backend.matmul(stream, hidden, &v_w)?;
+        let v = self.proj_matmul(stream, hidden, &attn.v_proj)?;
         let v = if let Some(ref bias) = attn.v_bias {
             self.backend.add(stream, &v, bias)?
         } else {
@@ -395,14 +419,14 @@ impl<B: ComputeBackend> Engine<B> {
                 .reshape(stream, &attn_out, &[seq_len as i64, cfg.hidden_size as i64])?;
 
         // Output projection.
-        let o_w = self.backend.transpose(stream, &attn.o_proj)?;
-        self.backend.matmul(stream, &attn_out, &o_w)
+        self.proj_matmul(stream, &attn_out, &attn.o_proj)
     }
 
     /// FFN block for a single layer (architecture doc section 7.4).
     ///
     /// `SwiGLU`: gate projection + `SiLU`, element-wise multiply with up
-    /// projection, then down projection.
+    /// projection, then down projection. All projections dispatch through
+    /// `proj_matmul` for quantized or plain weights.
     fn ffn_block(
         &self,
         stream: &B::Stream,
@@ -412,20 +436,16 @@ impl<B: ComputeBackend> Engine<B> {
         let ffn = &self.layers[layer_idx].ffn;
 
         // Gate projection + SiLU.
-        // Weights are [out, in] after GGUF dim reversal. Transpose for matmul(x, W.T).
-        let gate_w = self.backend.transpose(stream, &ffn.gate_proj)?;
-        let gate = self.backend.matmul(stream, hidden, &gate_w)?;
+        let gate = self.proj_matmul(stream, hidden, &ffn.gate_proj)?;
         let gate = self.backend.silu(stream, &gate)?;
 
         // Up projection.
-        let up_w = self.backend.transpose(stream, &ffn.up_proj)?;
-        let up = self.backend.matmul(stream, hidden, &up_w)?;
+        let up = self.proj_matmul(stream, hidden, &ffn.up_proj)?;
 
         // Gate * Up.
         let inter = self.backend.mul(stream, &gate, &up)?;
 
         // Down projection.
-        let down_w = self.backend.transpose(stream, &ffn.down_proj)?;
-        self.backend.matmul(stream, &inter, &down_w)
+        self.proj_matmul(stream, &inter, &ffn.down_proj)
     }
 }

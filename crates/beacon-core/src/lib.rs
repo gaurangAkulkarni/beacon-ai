@@ -27,7 +27,9 @@ pub use engine::Engine;
 pub use error::EngineError;
 pub use kv_cache::KvCache;
 pub use mlx_backend::MlxBackend;
-pub use weights::{beacon_dtype_to_mlx, AttentionWeights, FfnWeights, LayerWeights, ModelWeights};
+pub use weights::{
+    beacon_dtype_to_mlx, AttentionWeights, FfnWeights, LayerWeights, ModelWeights, ProjectionWeight,
+};
 
 // Re-export key types from beacon-format so downstream consumers do not
 // need to depend on beacon-format directly.

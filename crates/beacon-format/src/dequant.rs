@@ -278,32 +278,29 @@ fn dequant_q8_0(data: &[u8], out: &mut [u16]) {
 
 /// Decode the 12-byte packed 6-bit scale/min arrays used by `Q4_K` and `Q5_K`.
 ///
-/// These types store 8 sub-block scales and 8 sub-block mins packed into
-/// 12 bytes: the low 6 bits of each value in bytes 0..3 (scales) and 4..7
-/// (mins), with the upper 2 bits of the high-index entries packed in bytes
-/// 8..11.
+/// Matches llama.cpp's `get_scale_min_k4` exactly. The 12 bytes encode
+/// 8 scales and 8 mins:
+/// - For j < 4: scale[j] = q[j] & 63, min[j] = q[j+4] & 63
+/// - For j >= 4: scale[j] and min[j] are assembled from bytes q[j-4],
+///   q[j], and q[j+4] using 6-bit packing.
 ///
 /// Returns `([scales; 8], [mins; 8])` as raw `u8` values.
 #[inline]
-fn decode_k_scales_mins(scales_data: &[u8]) -> ([u8; 8], [u8; 8]) {
+fn decode_k_scales_mins(q: &[u8]) -> ([u8; 8], [u8; 8]) {
     let mut scales = [0u8; 8];
     let mut mins = [0u8; 8];
 
-    for i in 0..4 {
-        scales[i] = scales_data[i] & 0x3F;
-        scales[i + 4] = (scales_data[i] >> 4) & 0x03;
+    // j < 4: low 6 bits directly
+    for j in 0..4 {
+        scales[j] = q[j] & 0x3F;
+        mins[j] = q[j + 4] & 0x3F;
     }
 
-    for i in 0..4 {
-        mins[i] = scales_data[4 + i] & 0x3F;
-        mins[i + 4] = (scales_data[4 + i] >> 4) & 0x03;
-    }
-
-    // Bytes 8..11 contain the upper bits
-    for i in 0..4 {
-        let upper = scales_data[8 + i];
-        scales[i + 4] |= (upper & 0x0F) << 2;
-        mins[i + 4] |= (upper >> 4) << 2;
+    // j >= 4: assembled from the upper 2 bits of q[j-4] / q[j] and
+    // the low/high nibbles of q[j+4] (= q[8..11]).
+    for j in 4..8 {
+        scales[j] = (q[j + 4] & 0x0F) | ((q[j - 4] >> 6) << 4);
+        mins[j] = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
     }
 
     (scales, mins)
@@ -323,28 +320,46 @@ fn dequant_q4_k(data: &[u8], out: &mut [u16]) {
     const BLOCK_SIZE: usize = 256;
 
     let num_blocks = out.len() / BLOCK_SIZE;
-    for b in 0..num_blocks {
-        let block = &data[b * BLOCK_BYTES..][..BLOCK_BYTES];
+    for blk in 0..num_blocks {
+        let block = &data[blk * BLOCK_BYTES..][..BLOCK_BYTES];
         let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
         let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
 
-        let (scales, mins) = decode_k_scales_mins(&block[4..16]);
+        let (raw_scales, raw_mins) = decode_k_scales_mins(&block[4..16]);
 
-        let qs = &block[16..144]; // 128 bytes = 256 nibbles
+        // Pre-scale the sub-block scales and mins.
+        let mut scales = [0.0f32; 8];
+        let mut mins = [0.0f32; 8];
+        for j in 0..8 {
+            scales[j] = f32::from(raw_scales[j]) * d;
+            mins[j] = f32::from(raw_mins[j]) * dmin;
+        }
 
-        for sub in 0..8 {
-            let sc = f32::from(scales[sub]) * d;
-            let mn = f32::from(mins[sub]) * dmin;
-            let dst_base = b * BLOCK_SIZE + sub * 32;
-            let qs_off = sub * 16;
+        let qs = &block[16..144]; // 128 bytes
 
-            for i in 0..16 {
-                let byte = qs[qs_off + i];
-                let lo = f32::from(byte & 0x0F);
-                let hi = f32::from(byte >> 4);
-                out[dst_base + i * 2] = f32_to_f16(lo * sc - mn);
-                out[dst_base + i * 2 + 1] = f32_to_f16(hi * sc - mn);
+        // Process in pairs of sub-blocks (64 elements per iteration).
+        // Each 32 bytes yields 64 weights: low nibbles → sub-block b,
+        // high nibbles → sub-block b+1. Reference: gguflib gguf_q4_k_to_float.
+        let mut dst_idx = blk * BLOCK_SIZE;
+        let mut q_ptr = 0;
+        for b in (0..8).step_by(2) {
+            let sc = scales[b];
+            let mn = mins[b];
+            // First 32 elements: low nibbles with scale[b].
+            for j in 0..32 {
+                let w = f32::from(qs[q_ptr + j] & 0x0F);
+                out[dst_idx] = f32_to_f16(w * sc - mn);
+                dst_idx += 1;
             }
+            let sc2 = scales[b + 1];
+            let mn2 = mins[b + 1];
+            // Next 32 elements: high nibbles with scale[b+1].
+            for j in 0..32 {
+                let w = f32::from(qs[q_ptr + j] >> 4);
+                out[dst_idx] = f32_to_f16(w * sc2 - mn2);
+                dst_idx += 1;
+            }
+            q_ptr += 32;
         }
     }
 }
@@ -364,37 +379,51 @@ fn dequant_q5_k(data: &[u8], out: &mut [u16]) {
     const BLOCK_SIZE: usize = 256;
 
     let num_blocks = out.len() / BLOCK_SIZE;
-    for b in 0..num_blocks {
-        let block = &data[b * BLOCK_BYTES..][..BLOCK_BYTES];
+    for blk in 0..num_blocks {
+        let block = &data[blk * BLOCK_BYTES..][..BLOCK_BYTES];
         let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
         let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
 
-        let (scales, mins) = decode_k_scales_mins(&block[4..16]);
-        let high_bits = &block[16..48]; // 32 bytes of high bits
-        let low_nibs = &block[48..176]; // 128 bytes of low nibbles
+        let (raw_scales, raw_mins) = decode_k_scales_mins(&block[4..16]);
+        let qh = &block[16..48]; // 32 bytes of high bits
+        let ql = &block[48..176]; // 128 bytes of low nibbles
 
-        for sub in 0..8 {
-            let sc = f32::from(scales[sub]) * d;
-            let mn = f32::from(mins[sub]) * dmin;
-            let dst_off = sub * 32;
-            let ql_off = sub * 16;
+        let mut scales = [0.0f32; 8];
+        let mut mins = [0.0f32; 8];
+        for j in 0..8 {
+            scales[j] = f32::from(raw_scales[j]) * d;
+            mins[j] = f32::from(raw_mins[j]) * dmin;
+        }
 
-            for i in 0..16 {
-                let byte = low_nibs[ql_off + i];
-                let elem_lo = dst_off + i * 2;
-                let elem_hi = dst_off + i * 2 + 1;
-
-                // Low 4 bits from low_nibs
-                let mut lo = u32::from(byte & 0x0F);
-                let mut hi = u32::from(byte >> 4);
-
-                // 5th bit from high_bits
-                lo |= u32::from((high_bits[elem_lo / 8] >> (elem_lo % 8)) & 1) << 4;
-                hi |= u32::from((high_bits[elem_hi / 8] >> (elem_hi % 8)) & 1) << 4;
-
-                out[b * BLOCK_SIZE + elem_lo] = f32_to_f16(lo as f32 * sc - mn);
-                out[b * BLOCK_SIZE + elem_hi] = f32_to_f16(hi as f32 * sc - mn);
+        // Same pattern as Q4_K: pairs of sub-blocks, 32 bytes → 64 elements.
+        // Low nibbles get scale[b], high nibbles get scale[b+1].
+        // High bit from qh array adds the 5th bit.
+        let mut dst_idx = blk * BLOCK_SIZE;
+        let mut q_ptr = 0usize;
+        for b in (0..8).step_by(2) {
+            let sc = scales[b];
+            let mn = mins[b];
+            // First 32 elements: low nibbles
+            for j in 0..32 {
+                let lo4 = u32::from(ql[q_ptr + j] & 0x0F);
+                let elem = dst_idx - blk * BLOCK_SIZE;
+                let hb = u32::from((qh[elem / 8] >> (elem % 8)) & 1) << 4;
+                let w = (lo4 | hb) as f32 * sc - mn;
+                out[dst_idx] = f32_to_f16(w);
+                dst_idx += 1;
             }
+            let sc2 = scales[b + 1];
+            let mn2 = mins[b + 1];
+            // Next 32 elements: high nibbles
+            for j in 0..32 {
+                let hi4 = u32::from(ql[q_ptr + j] >> 4);
+                let elem = dst_idx - blk * BLOCK_SIZE;
+                let hb = u32::from((qh[elem / 8] >> (elem % 8)) & 1) << 4;
+                let w = (hi4 | hb) as f32 * sc2 - mn2;
+                out[dst_idx] = f32_to_f16(w);
+                dst_idx += 1;
+            }
+            q_ptr += 32;
         }
     }
 }
@@ -413,36 +442,36 @@ fn dequant_q6_k(data: &[u8], out: &mut [u16]) {
     const BLOCK_SIZE: usize = 256;
 
     let num_blocks = out.len() / BLOCK_SIZE;
-    for b in 0..num_blocks {
-        let block = &data[b * BLOCK_BYTES..][..BLOCK_BYTES];
-        let low_data = &block[0..128]; // low 4 bits
-        let high_data = &block[128..192]; // high 2 bits
-        let sc_bytes = &block[192..208]; // 16 x i8 sub-block scales
-        let d = f16_to_f32(u16::from_le_bytes([block[208], block[209]]));
+    for blk in 0..num_blocks {
+        let block = &data[blk * BLOCK_BYTES..][..BLOCK_BYTES];
+        // Reference: gguflib gguf_q6_k_to_float
+        let super_scale = f16_to_f32(u16::from_le_bytes([
+            block[128 + 64 + 16],
+            block[128 + 64 + 17],
+        ]));
 
-        for (sub, &sc_val) in sc_bytes.iter().enumerate().take(16) {
-            let sub_scale = f32::from(sc_val as i8) * d;
-            let dst_off = sub * 16;
+        let mut dst_idx = blk * BLOCK_SIZE;
+        let mut l_ptr = 0usize; // into L (low 4 bits, 128 bytes at block[0..128])
+        let mut h_ptr = 128usize; // into H (high 2 bits, 64 bytes at block[128..192])
+        let mut sc_ptr = 192usize; // into scales (16 bytes at block[192..208])
 
-            for i in 0..16 {
-                let elem = dst_off + i;
-                // Low 4 bits: packed 2 per byte
-                let low_byte = low_data[elem / 2];
-                let low4 = if elem % 2 == 0 {
-                    low_byte & 0x0F
-                } else {
-                    low_byte >> 4
-                };
+        for _cluster in 0..2 {
+            for j in 0..128u32 {
+                // Scale for this element's sub-block (16 elements per sub-block)
+                let scale = f32::from(block[sc_ptr + (j / 16) as usize] as i8) * super_scale;
 
-                // High 2 bits: packed 4 per byte
-                let high_byte = high_data[elem / 4];
-                let high2 = (high_byte >> ((elem % 4) * 2)) & 0x03;
+                // Low 4 bits: L array, two halves interleaved
+                let low4 = (block[l_ptr + (j % 64) as usize] >> ((j / 64) * 4)) & 0x0F;
+                // High 2 bits: H array
+                let high2 = (block[h_ptr + (j % 32) as usize] >> ((j / 32) * 2)) & 0x03;
 
-                // Combine to 6-bit value, centred at 32
-                let q = u32::from(low4) | (u32::from(high2) << 4);
-                let val = (q as f32 - 32.0) * sub_scale;
-                out[b * BLOCK_SIZE + elem] = f32_to_f16(val);
+                let q6 = (low4 | (high2 << 4)) as i8 - 32;
+                out[dst_idx] = f32_to_f16(f32::from(q6) * scale);
+                dst_idx += 1;
             }
+            l_ptr += 64;
+            h_ptr += 32;
+            sc_ptr += 8;
         }
     }
 }

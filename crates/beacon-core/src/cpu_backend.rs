@@ -91,6 +91,7 @@ impl ComputeBackend for CpuBackend {
         _x: &Self::Tensor,
         _w: &Self::Tensor,
         _scales: &Self::Tensor,
+        _biases: Option<&Self::Tensor>,
         _group_size: i32,
         _bits: i32,
     ) -> Result<Self::Tensor, EngineError> {

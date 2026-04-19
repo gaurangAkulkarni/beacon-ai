@@ -54,10 +54,11 @@ impl ComputeBackend for MlxBackend {
         x: &Self::Tensor,
         w: &Self::Tensor,
         scales: &Self::Tensor,
+        biases: Option<&Self::Tensor>,
         group_size: i32,
         bits: i32,
     ) -> Result<Self::Tensor, EngineError> {
-        beacon_mlx::ops::quantized_matmul(stream, x, w, scales, group_size, bits)
+        beacon_mlx::ops::quantized_matmul(stream, x, w, scales, biases, group_size, bits)
             .map_err(EngineError::from)
     }
 

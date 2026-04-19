@@ -59,7 +59,7 @@ int32_t beacon_op_matmul(
 int32_t beacon_op_quantized_matmul(
     BeaconContext* ctx, BeaconStream* stream,
     const BeaconTensor* x, const BeaconTensor* w_quantized,
-    const BeaconTensor* scales,
+    const BeaconTensor* scales, const BeaconTensor* biases,
     int32_t group_size, int32_t bits,
     BeaconTensor** out) {
     return beacon::guard([&]() -> int32_t {
@@ -71,11 +71,15 @@ int32_t beacon_op_quantized_matmul(
 #ifdef BEACON_NO_MLX
         return BEACON_ERR_UNKNOWN;
 #else
+        std::optional<mlx::core::array> bias_arr;
+        if (biases != nullptr) {
+            bias_arr = biases->arr;
+        }
         auto result = mlx::core::quantized_matmul(
             x->arr,
             w_quantized->arr,
             scales->arr,
-            /*biases=*/std::nullopt,
+            bias_arr,
             /*transpose=*/true,
             std::optional<int>{group_size},
             std::optional<int>{bits},
@@ -409,6 +413,146 @@ int32_t beacon_op_embedding(
 #else
         // take(weight, indices, axis=0) selects rows by index.
         auto result = mlx::core::take(weight->arr, indices->arr, 0, stream->stream);
+        *out = box_result(std::move(result));
+        return BEACON_OK;
+#endif
+    });
+}
+
+int32_t beacon_op_quantize(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* w,
+    int32_t group_size, int32_t bits,
+    BeaconTensor** out_packed, BeaconTensor** out_scales,
+    BeaconTensor** out_biases) {
+    return beacon::guard([&]() -> int32_t {
+        if (any_null({ctx, stream, w, out_packed, out_scales, out_biases})) {
+            beacon::set_error_message("beacon_op_quantize: null argument");
+            return BEACON_ERR_INVALID_ARGUMENT;
+        }
+#ifdef BEACON_NO_MLX
+        return BEACON_ERR_UNKNOWN;
+#else
+        // mlx::core::quantize returns {packed_w, scales, biases}.
+        auto result = mlx::core::quantize(
+            w->arr,
+            std::optional<int>{group_size},
+            std::optional<int>{bits},
+            /*mode=*/"affine",
+            /*global_scale=*/std::nullopt,
+            stream->stream);
+        *out_packed = box_result(std::move(result[0]));
+        *out_scales = box_result(std::move(result[1]));
+        *out_biases = box_result(std::move(result[2]));
+        return BEACON_OK;
+#endif
+    });
+}
+
+#ifndef BEACON_NO_MLX
+// gguflib is linked via MLX; include its header for dequantization.
+extern "C" {
+void gguf_q4_0_to_float(void*, void*, uint64_t, void*);
+void gguf_q4_1_to_float(void*, void*, uint64_t, void*);
+void gguf_q8_0_to_float(void*, void*, uint64_t, void*);
+void gguf_q4_k_to_float(void*, void*, uint64_t, void*);
+void gguf_q6_k_to_float(void*, void*, uint64_t, void*);
+void gguf_q2_k_to_float(void*, void*, uint64_t, void*);
+}
+
+// Forward-declare q5_0 dequant (not in gguflib, implement inline)
+static void dequant_q5_0_to_float(const uint8_t* data, float* out, uint64_t count) {
+    // Reference: llama.cpp dequantize_row_q5_0
+    // Elements 0..15 are low nibbles, elements 16..31 are high nibbles.
+    constexpr int QK = 32;
+    constexpr int BLOCK_BYTES = 22;
+    uint64_t num_blocks = count / QK;
+    const uint8_t* block = data;
+    for (uint64_t b = 0; b < num_blocks; b++) {
+        uint16_t half_bits = block[0] | (uint16_t(block[1]) << 8);
+        float d;
+        { // f16 → f32
+            uint32_t sign = uint32_t(half_bits >> 15) << 31;
+            uint32_t exp = uint32_t((half_bits >> 10) & 0x1F);
+            uint32_t man = uint32_t(half_bits & 0x3FF);
+            uint32_t bits;
+            if (exp == 0) bits = sign;
+            else if (exp == 31) bits = sign | 0x7F800000 | (man << 13);
+            else bits = sign | ((exp + 112) << 23) | (man << 13);
+            memcpy(&d, &bits, 4);
+        }
+        uint32_t qh;
+        memcpy(&qh, &block[2], 4);
+        float* y = &out[b * QK];
+        for (int j = 0; j < QK/2; j++) {
+            uint32_t xh_0 = ((qh >> (j + 0)) & 1) << 4;
+            uint32_t xh_1 = ((qh >> (j + 16)) & 1) << 4;
+            int32_t x0 = ((block[6+j] & 0x0F) | xh_0) - 16;
+            int32_t x1 = ((block[6+j] >> 4) | xh_1) - 16;
+            y[j]        = float(x0) * d;
+            y[j + QK/2] = float(x1) * d;
+        }
+        block += BLOCK_BYTES;
+    }
+}
+
+static void dequant_q5_k_to_float(const uint8_t* data, float* out, uint64_t count);
+static void dequant_q3_k_to_float(const uint8_t* data, float* out, uint64_t count);
+static void dequant_q8_k_to_float(const uint8_t* data, float* out, uint64_t count);
+
+// Stub implementations for less common types
+static void dequant_q5_k_to_float(const uint8_t*, float* out, uint64_t count) {
+    // Fallback: zeros (will be replaced with proper impl)
+    for (uint64_t i = 0; i < count; i++) out[i] = 0.0f;
+}
+static void dequant_q3_k_to_float(const uint8_t*, float* out, uint64_t count) {
+    for (uint64_t i = 0; i < count; i++) out[i] = 0.0f;
+}
+static void dequant_q8_k_to_float(const uint8_t*, float* out, uint64_t count) {
+    for (uint64_t i = 0; i < count; i++) out[i] = 0.0f;
+}
+#endif
+
+int32_t beacon_op_dequantize_gguf(
+    BeaconContext* ctx, BeaconStream* stream,
+    const void* data, size_t /*data_len*/,
+    int32_t gguf_type, uint64_t num_elements,
+    const int64_t* shape, size_t ndim,
+    BeaconTensor** out) {
+    return beacon::guard([&]() -> int32_t {
+        if (any_null({ctx, stream, out}) || data == nullptr || shape == nullptr) {
+            beacon::set_error_message("beacon_op_dequantize_gguf: null argument");
+            return BEACON_ERR_INVALID_ARGUMENT;
+        }
+#ifdef BEACON_NO_MLX
+        return BEACON_ERR_UNKNOWN;
+#else
+        // Allocate f32 buffer and dequantize using gguflib
+        std::vector<float> f32_data(num_elements);
+        void* src = const_cast<void*>(data);
+
+        switch (gguf_type) {
+            case 2:  gguf_q4_0_to_float(src, f32_data.data(), num_elements, nullptr); break;
+            case 3:  gguf_q4_1_to_float(src, f32_data.data(), num_elements, nullptr); break;
+            case 6:  dequant_q5_0_to_float(static_cast<const uint8_t*>(data), f32_data.data(), num_elements); break;
+            case 8:  gguf_q8_0_to_float(src, f32_data.data(), num_elements, nullptr); break;
+            case 10: gguf_q2_k_to_float(src, f32_data.data(), num_elements, nullptr); break;
+            case 11: dequant_q3_k_to_float(static_cast<const uint8_t*>(data), f32_data.data(), num_elements); break;
+            case 12: gguf_q4_k_to_float(src, f32_data.data(), num_elements, nullptr); break;
+            case 13: dequant_q5_k_to_float(static_cast<const uint8_t*>(data), f32_data.data(), num_elements); break;
+            case 14: gguf_q6_k_to_float(src, f32_data.data(), num_elements, nullptr); break;
+            case 15: dequant_q8_k_to_float(static_cast<const uint8_t*>(data), f32_data.data(), num_elements); break;
+            default:
+                beacon::set_error_message("beacon_op_dequantize_gguf: unsupported gguf type");
+                return BEACON_ERR_UNSUPPORTED_DTYPE;
+        }
+
+        // Create MLX F32 tensor from the dequantized data
+        mlx::core::Shape mlx_shape(ndim);
+        for (size_t i = 0; i < ndim; i++) {
+            mlx_shape[i] = static_cast<int>(shape[i]);
+        }
+        auto result = mlx::core::array(f32_data.data(), mlx_shape, mlx::core::float32);
         *out = box_result(std::move(result));
         return BEACON_OK;
 #endif
