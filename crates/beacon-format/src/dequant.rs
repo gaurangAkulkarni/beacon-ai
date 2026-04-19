@@ -1,13 +1,12 @@
-//! Load-time dequantization of GGUF quantized weights to F16.
+//! Dequantization of GGUF quantized weights to F16.
 //!
-//! When the forward pass uses `matmul` (not `quantized_matmul`), quantized
-//! weight data (`Q4_0`, `Q8_0`, `Q4_K`, etc.) must be expanded to F16 before
-//! creating MLX tensors. This module implements dequantization for every
-//! GGUF quantization type encountered in practice.
+//! Quantized weight data (`Q4_0`, `Q8_0`, `Q4_K`, etc.) is expanded to F16
+//! during GGUF-to-beacon conversion so that `.beacon` files contain only
+//! non-quantized data ready for zero-copy loading.
 //!
-//! The cost is roughly 2x memory (Q4 to F16 doubles the bytes), but it is
-//! correct and enables all GGUF quantization types to work through the
-//! standard `matmul` path. A quantized-matmul bridge is planned for v0.2.
+//! This module implements dequantization for every GGUF quantization type
+//! encountered in practice. A native quantized-matmul bridge (avoiding the
+//! F16 expansion entirely) is planned for v0.2.
 
 #![allow(
     clippy::cast_possible_wrap,
@@ -17,7 +16,7 @@
     clippy::similar_names
 )]
 
-use beacon_format::BeaconDtype;
+use crate::BeaconDtype;
 
 // ---------------------------------------------------------------------------
 // Public entry point

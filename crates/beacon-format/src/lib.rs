@@ -13,6 +13,7 @@
 pub mod beacon;
 mod config;
 pub mod convert;
+pub mod dequant;
 mod dtype;
 mod error;
 pub mod gguf;

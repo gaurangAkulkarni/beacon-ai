@@ -145,7 +145,7 @@ fn load_tensor(
 ) -> Result<MlxTensor, EngineError> {
     let shape: Vec<i64> = meta.shape.iter().map(|&d| d as i64).collect();
 
-    if crate::dequant::is_quantized(meta.dtype) {
+    if beacon_format::dequant::is_quantized(meta.dtype) {
         // Dequantize: read raw quantized bytes, expand to F16, store in
         // anonymous mmap, and create an MlxTensor with Dtype::F16.
         let mmap = beacon.mmap();
@@ -154,7 +154,8 @@ fn load_tensor(
         let raw_data = &mmap[offset..offset + data_len];
         let num_elements = meta.num_elements();
 
-        let f16_data = crate::dequant::dequantize_to_f16(raw_data, meta.dtype, num_elements);
+        let f16_data =
+            beacon_format::dequant::dequantize_to_f16(raw_data, meta.dtype, num_elements);
 
         // Write f16 data into an anonymous mmap.
         let byte_len = f16_data.len() * 2;

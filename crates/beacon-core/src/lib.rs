@@ -10,12 +10,16 @@
 
 mod backend;
 mod cpu_backend;
-pub mod dequant;
 mod engine;
 mod error;
 mod kv_cache;
 mod mlx_backend;
 mod weights;
+
+/// Re-export dequantization from beacon-format (canonical location).
+pub mod dequant {
+    pub use beacon_format::dequant::*;
+}
 
 pub use backend::ComputeBackend;
 pub use cpu_backend::{CpuBackend, CpuStream, CpuTensor};
