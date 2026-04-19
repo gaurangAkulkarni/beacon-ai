@@ -1,0 +1,14 @@
+{
+  "name": "beacon-ai",
+  "version": "0.1.0",
+  "description": "MLX-first LLM inference for Apple Silicon",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "beacon-ai",
+    "triples": {
+      "defaults": true
+    }
+  },
+  "license": "Apache-2.0"
+}

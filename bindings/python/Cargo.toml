@@ -1,0 +1,16 @@
+[package]
+name = "beacon-python"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Python bindings for the Beacon LLM inference engine."
+
+[lib]
+name = "beacon_ai"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module"] }
+beacon-core = { path = "../../crates/beacon-core" }
+beacon-format = { path = "../../crates/beacon-format" }
+beacon-scheduler = { path = "../../crates/beacon-scheduler" }

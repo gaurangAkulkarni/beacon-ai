@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 12 — Python bindings (`bindings/python`).**
+**Next up: Step 14 — Benchmark harness (`benches/`).**
 
-Steps 1–11 complete and committed. All locally verified on macOS ARM64.
+Steps 1–13 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -469,15 +469,74 @@ Architecture reference: [§12.4 HTTP Server](architecture.md#124-http-server-bea
 
 ---
 
-### Steps 12 – 15 ⏳ not started
+### Step 12 — Python bindings ✅ complete
+
+Architecture reference: [§12.1 Python Bindings](architecture.md#121-python-pyo3-maturin).
+
+**Success criteria:**
+- [x] PyO3-based crate with `maturin` build configuration
+- [x] `Engine.load()`, `engine.complete()`, `engine.stream()` API surface
+- [x] Type stubs (`.pyi`) for IDE support
+- [ ] `pip install beacon-ai` end-to-end (requires maturin wheel build + real model)
+- [ ] 5-line example runs (requires wired engine, deferred to integration)
+
+**Delivered:**
+- `bindings/python/Cargo.toml` — cdylib crate `beacon-python` (lib name
+  `beacon_ai`) with PyO3 0.25 + extension-module feature.
+- `bindings/python/src/lib.rs` — `Engine` pyclass with `load()` (staticmethod),
+  `complete()`, `stream()` methods. `TokenIterator` pyclass implementing
+  `__iter__`/`__next__` for streaming. Module registered as `beacon_ai`.
+- `bindings/python/pyproject.toml` — maturin build backend, Python >=3.9.
+- `bindings/python/beacon_ai.pyi` — type stubs for `Engine` and `Iterator[str]`.
+- Added `"bindings/python"` to workspace members.
+
+**Local verification (macOS ARM64):**
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-python --all-targets -- -D warnings` — clean
+- `cargo check --workspace --all-targets` — clean
+
+**Note:** `cargo build` for `beacon-python` produces a linker error for Python
+symbols, which is expected for PyO3 cdylib crates. These are built via
+`maturin build`, not `cargo build` directly. `cargo check` and `cargo clippy`
+pass without issue.
+
+---
+
+### Step 13 — Node bindings ✅ complete
+
+Architecture reference: [§12.2 Node Bindings](architecture.md#122-node-napi-rs).
+
+**Success criteria:**
+- [x] napi-rs-based crate with TypeScript definition generation
+- [x] `Engine.load()`, `engine.complete()` API surface
+- [x] `package.json` with napi configuration
+- [ ] `npm install beacon-ai` end-to-end (requires napi-rs build + real model)
+- [ ] 5-line TS example runs (requires wired engine, deferred to integration)
+
+**Delivered:**
+- `bindings/node/Cargo.toml` — cdylib crate `beacon-node` with napi v2
+  (napi9 feature) + napi-derive.
+- `bindings/node/src/lib.rs` — `Engine` struct with `#[napi]` attribute,
+  `load()` factory method, `complete()` method.
+- `bindings/node/build.rs` — napi-build setup.
+- `bindings/node/package.json` — npm package config with napi triples.
+- Added `"bindings/node"` to workspace members.
+
+**Local verification (macOS ARM64):**
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-node --all-targets -- -D warnings` — clean
+- `cargo check --workspace --all-targets` — clean
+- `cargo build -p beacon-node` — clean
+
+---
+
+### Steps 14 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 12 | Python bindings | §12.1 | not started |
-| 13 | Node bindings | §12.2 | not started |
 | 14 | Benchmark harness | §13.4 | not started |
 | 15 | Quality eval harness | §13.3 | not started |
 
@@ -533,6 +592,9 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | Forward pass generified over `ComputeBackend` | `forward()`, `attention_block()`, `ffn_block()` now `impl<B: ComputeBackend> Engine<B>`. Only `load()` is backend-specific. Zero code duplication between MLX and CPU paths. |
 | 2026-04-19 | `kv_cache_update` + `create_token_tensor` added to `ComputeBackend` | Required to generalise the forward pass — these were MLX-specific calls embedded in the engine. |
 | 2026-04-19 | CPU `quantized_matmul` returns error in v0.1 | CPU Q4 matmul exists in beacon-kernels but the ComputeBackend interface doesn't match its API yet. F32 matmul works; quantized path is v0.2. |
+| 2026-04-19 | PyO3 bumped from 0.24 to 0.25 | System Python is 3.14 which requires PyO3 >= 0.25 for compatibility. PyO3 0.24 max supported version is 3.13. |
+| 2026-04-19 | Python `Engine.load()` uses `#[staticmethod]` instead of `#[classmethod]` | PyO3 0.25 changed the classmethod API. Using staticmethod is simpler and provides the same user-facing API (`Engine.load(path)`). |
+| 2026-04-19 | Python cdylib builds via `maturin`, not `cargo build` | PyO3 extension modules need Python symbols at link time. `cargo check` and `cargo clippy` work; `cargo build` for the cdylib requires `maturin build`. |
 
 ---
 

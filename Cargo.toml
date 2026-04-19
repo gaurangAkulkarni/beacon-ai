@@ -12,6 +12,8 @@ members = [
     "crates/beacon-registry",
     "crates/beacon-cli",
     "server/beacon-server",
+    "bindings/python",
+    "bindings/node",
 ]
 
 [workspace.package]

@@ -1,0 +1,19 @@
+[package]
+name = "beacon-node"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Node.js bindings for the Beacon LLM inference engine."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", features = ["napi9"] }
+napi-derive = "2"
+beacon-core = { path = "../../crates/beacon-core" }
+beacon-format = { path = "../../crates/beacon-format" }
+beacon-scheduler = { path = "../../crates/beacon-scheduler" }
+
+[build-dependencies]
+napi-build = "2"
