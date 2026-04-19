@@ -327,16 +327,19 @@ impl<B: ComputeBackend> Engine<B> {
             return Err(EngineError::ContextOverflow);
         }
 
-        // Squeeze batch dim from K/V for cache update: [1,heads,seq,dim] → [seq,heads,dim]
-        // The KV cache is allocated as [max_ctx, num_kv_heads, head_dim].
+        // Convert K/V from attention layout [1,heads,seq,dim] to cache layout
+        // [seq,heads,dim]. Must swapaxes back to [1,seq,heads,dim] first, then
+        // squeeze the batch dim, so the data ordering matches the cache format.
+        let k_for_cache = self.backend.swapaxes(stream, &k, 1, 2)?; // [1,seq,heads,dim]
         let k_squeezed = self.backend.reshape(
             stream,
-            &k,
+            &k_for_cache,
             &[seq_len as i64, cfg.num_kv_heads as i64, cfg.head_dim as i64],
         )?;
+        let v_for_cache = self.backend.swapaxes(stream, &v, 1, 2)?;
         let v_squeezed = self.backend.reshape(
             stream,
-            &v,
+            &v_for_cache,
             &[seq_len as i64, cfg.num_kv_heads as i64, cfg.head_dim as i64],
         )?;
 
@@ -351,18 +354,22 @@ impl<B: ComputeBackend> Engine<B> {
             position as i64,
         )?;
 
-        // Re-add batch dim for attention: [cached_len, heads, dim] → [1, heads, cached_len, dim]
+        // Convert cached K/V from cache layout [cached_len,heads,dim] back to
+        // attention layout [1,heads,cached_len,dim]. Add batch dim first as
+        // [1,cached_len,heads,dim], then swapaxes to [1,heads,cached_len,dim].
         let cached_len = (position + seq_len) as i64;
         let k_full = self.backend.reshape(
             stream,
             &k_cached,
-            &[1, cfg.num_kv_heads as i64, cached_len, cfg.head_dim as i64],
+            &[1, cached_len, cfg.num_kv_heads as i64, cfg.head_dim as i64],
         )?;
+        let k_full = self.backend.swapaxes(stream, &k_full, 1, 2)?;
         let v_full = self.backend.reshape(
             stream,
             &v_cached,
-            &[1, cfg.num_kv_heads as i64, cached_len, cfg.head_dim as i64],
+            &[1, cached_len, cfg.num_kv_heads as i64, cfg.head_dim as i64],
         )?;
+        let v_full = self.backend.swapaxes(stream, &v_full, 1, 2)?;
 
         // Scaled dot-product attention (fused in MLX backend).
         let scale = 1.0 / (cfg.head_dim as f32).sqrt();
