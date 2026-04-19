@@ -65,21 +65,66 @@ pub fn beacon_dtype_to_mlx(bd: beacon_format::BeaconDtype) -> Dtype {
         beacon_format::BeaconDtype::BF16 => Dtype::BF16,
         beacon_format::BeaconDtype::I32 => Dtype::I32,
         beacon_format::BeaconDtype::I8 => Dtype::I8,
-        beacon_format::BeaconDtype::Q4_0 => Dtype::Q4_0,
-        beacon_format::BeaconDtype::Q4K => Dtype::Q4K,
-        beacon_format::BeaconDtype::Q5K => Dtype::Q5K,
+        beacon_format::BeaconDtype::Q4_0 | beacon_format::BeaconDtype::Q4_1 => Dtype::Q4_0,
+        beacon_format::BeaconDtype::Q4K
+        | beacon_format::BeaconDtype::Q2K
+        | beacon_format::BeaconDtype::Q3K => Dtype::Q4K,
+        beacon_format::BeaconDtype::Q5_0
+        | beacon_format::BeaconDtype::Q5_1
+        | beacon_format::BeaconDtype::Q5K => Dtype::Q5K,
         beacon_format::BeaconDtype::Q6K => Dtype::Q6K,
-        beacon_format::BeaconDtype::Q8_0 => Dtype::Q8_0,
+        beacon_format::BeaconDtype::Q8_0 | beacon_format::BeaconDtype::Q8K => Dtype::Q8_0,
     }
 }
 
 /// Find a tensor by name in the beacon file's tensor list.
+///
+/// Tries `HuggingFace` names first, then GGUF names as fallback.
 fn find_tensor<'a>(beacon: &'a BeaconFile, name: &str) -> Result<&'a TensorMeta, EngineError> {
-    beacon
-        .tensors
-        .iter()
-        .find(|t| t.name == name)
-        .ok_or_else(|| EngineError::WeightNotFound(name.to_owned()))
+    // Try exact match first.
+    if let Some(t) = beacon.tensors.iter().find(|t| t.name == name) {
+        return Ok(t);
+    }
+    // Try GGUF equivalent name.
+    let gguf_name = hf_to_gguf_name(name);
+    if let Some(t) = beacon.tensors.iter().find(|t| t.name == gguf_name) {
+        return Ok(t);
+    }
+    Err(EngineError::WeightNotFound(name.to_owned()))
+}
+
+/// Map a `HuggingFace` tensor name to the GGUF equivalent.
+fn hf_to_gguf_name(hf_name: &str) -> String {
+    // Global tensors.
+    match hf_name {
+        "model.embed_tokens.weight" => return "token_embd.weight".to_owned(),
+        "model.norm.weight" => return "output_norm.weight".to_owned(),
+        "lm_head.weight" => return "output.weight".to_owned(),
+        _ => {}
+    }
+
+    // Layer tensors: model.layers.{i}.xxx → blk.{i}.yyy
+    if let Some(rest) = hf_name.strip_prefix("model.layers.") {
+        if let Some(dot_pos) = rest.find('.') {
+            let layer_num = &rest[..dot_pos];
+            let suffix = &rest[dot_pos + 1..];
+            let gguf_suffix = match suffix {
+                "self_attn.q_proj.weight" => "attn_q.weight",
+                "self_attn.k_proj.weight" => "attn_k.weight",
+                "self_attn.v_proj.weight" => "attn_v.weight",
+                "self_attn.o_proj.weight" => "attn_output.weight",
+                "mlp.gate_proj.weight" => "ffn_gate.weight",
+                "mlp.up_proj.weight" => "ffn_up.weight",
+                "mlp.down_proj.weight" => "ffn_down.weight",
+                "input_layernorm.weight" => "attn_norm.weight",
+                "post_attention_layernorm.weight" => "ffn_norm.weight",
+                other => other, // pass through unknown suffixes
+            };
+            return format!("blk.{layer_num}.{gguf_suffix}");
+        }
+    }
+
+    hf_name.to_owned()
 }
 
 /// Create an `MlxTensor` from a tensor metadata entry in a beacon file.

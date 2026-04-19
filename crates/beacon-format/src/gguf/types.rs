@@ -65,10 +65,16 @@ impl GgufTensorType {
             Self::I8 => Ok(BeaconDtype::I8),
             Self::I32 => Ok(BeaconDtype::I32),
             Self::Q4_0 => Ok(BeaconDtype::Q4_0),
+            Self::Q4_1 => Ok(BeaconDtype::Q4_1),
+            Self::Q5_0 => Ok(BeaconDtype::Q5_0),
+            Self::Q5_1 => Ok(BeaconDtype::Q5_1),
+            Self::Q8_0 => Ok(BeaconDtype::Q8_0),
+            Self::Q2K => Ok(BeaconDtype::Q2K),
+            Self::Q3K => Ok(BeaconDtype::Q3K),
             Self::Q4K => Ok(BeaconDtype::Q4K),
             Self::Q5K => Ok(BeaconDtype::Q5K),
             Self::Q6K => Ok(BeaconDtype::Q6K),
-            Self::Q8_0 => Ok(BeaconDtype::Q8_0),
+            Self::Q8K => Ok(BeaconDtype::Q8K),
             other => Err(FormatError::UnsupportedGgufType(other as u32)),
         }
     }

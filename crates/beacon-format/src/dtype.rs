@@ -20,6 +20,12 @@ pub enum BeaconDtype {
     Q5K = 102,
     Q6K = 103,
     Q8_0 = 104,
+    Q4_1 = 105,
+    Q5_0 = 106,
+    Q5_1 = 107,
+    Q2K = 108,
+    Q3K = 109,
+    Q8K = 110,
 }
 
 impl BeaconDtype {
@@ -36,6 +42,12 @@ impl BeaconDtype {
             102 => Some(Self::Q5K),
             103 => Some(Self::Q6K),
             104 => Some(Self::Q8_0),
+            105 => Some(Self::Q4_1),
+            106 => Some(Self::Q5_0),
+            107 => Some(Self::Q5_1),
+            108 => Some(Self::Q2K),
+            109 => Some(Self::Q3K),
+            110 => Some(Self::Q8K),
             _ => None,
         }
     }
@@ -44,8 +56,8 @@ impl BeaconDtype {
     pub fn block_size(self) -> u64 {
         match self {
             Self::F32 | Self::F16 | Self::BF16 | Self::I32 | Self::I8 => 1,
-            Self::Q4_0 | Self::Q8_0 => 32,
-            Self::Q4K | Self::Q5K | Self::Q6K => 256,
+            Self::Q4_0 | Self::Q4_1 | Self::Q5_0 | Self::Q5_1 | Self::Q8_0 => 32,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => 256,
         }
     }
 
@@ -55,11 +67,17 @@ impl BeaconDtype {
             Self::F32 | Self::I32 => 4,
             Self::F16 | Self::BF16 => 2,
             Self::I8 => 1,
-            Self::Q4_0 => 18, // 2-byte scale + 16 bytes of 4-bit weights (32 elements)
-            Self::Q8_0 => 34, // 2-byte scale + 32 bytes of 8-bit weights
-            Self::Q4K => 144, // 256-element block
+            Self::Q4_0 => 18, // 2-byte scale + 16 bytes (32 elements)
+            Self::Q4_1 => 20, // 2-byte scale + 2-byte min + 16 bytes
+            Self::Q5_0 => 22, // 2-byte scale + 4 bytes high-bits + 16 bytes
+            Self::Q5_1 => 24, // 2-byte scale + 2-byte min + 4 bytes high-bits + 16 bytes
+            Self::Q8_0 => 34, // 2-byte scale + 32 bytes
+            Self::Q2K => 84,  // 256-element block
+            Self::Q3K => 110,
+            Self::Q4K => 144,
             Self::Q5K => 176,
             Self::Q6K => 210,
+            Self::Q8K => 292,
         }
     }
 
