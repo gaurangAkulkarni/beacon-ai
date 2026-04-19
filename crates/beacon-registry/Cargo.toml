@@ -9,5 +9,11 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
+[dependencies]
+beacon-format = { path = "../beacon-format" }
+thiserror = "2"
+reqwest = { version = "0.12", features = ["blocking"] }
+indicatif = "0.17"
+
 [lints]
 workspace = true

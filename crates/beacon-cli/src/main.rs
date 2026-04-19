@@ -84,10 +84,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Pull { model } => {
-            cmd_pull(&model);
-            Ok(())
-        }
+        Command::Pull { model } => cmd_pull(&model),
         Command::Run {
             model,
             prompt,
@@ -119,21 +116,34 @@ async fn main() -> Result<()> {
 // Subcommand implementations
 // ---------------------------------------------------------------------------
 
-/// `beacon pull` — placeholder until `beacon-registry` is implemented.
-fn cmd_pull(model: &str) {
-    eprintln!(
-        "{} {} is not yet implemented (beacon-registry lands in a future step).",
-        "note:".yellow().bold(),
-        "beacon pull".bold()
-    );
+/// `beacon pull` — download a model from `HuggingFace` Hub and convert to
+/// `.beacon` format.
+fn cmd_pull(model: &str) -> Result<()> {
+    eprintln!("{} Resolving model: {}", "=>".green().bold(), model.cyan());
+
+    let spec = beacon_registry::resolve_model(model).context("failed to resolve model name")?;
+
+    eprintln!("  Repo      : {}", spec.repo);
+    eprintln!("  GGUF file : {}", spec.gguf_file);
+    eprintln!("  Tokenizer : {}", spec.tokenizer_repo);
     eprintln!();
-    eprintln!("  Model requested: {}", model.cyan());
+
+    let cache_dir = default_models_dir();
+    let result = beacon_registry::pull_model(&spec, &cache_dir).context("failed to pull model")?;
+
     eprintln!();
-    eprintln!("  To use a GGUF model you already have on disk:");
+    eprintln!("{} Model ready!", "ok:".green().bold());
+    eprintln!("  GGUF      : {}", result.gguf_path.display());
+    eprintln!("  Tokenizer : {}", result.tokenizer_path.display());
+    eprintln!("  Beacon    : {}", result.beacon_path.display());
+    eprintln!();
     eprintln!(
-        "    {} /path/to/model.gguf \"your prompt\"",
-        "beacon run".green()
+        "  Run with: {} {} \"your prompt\"",
+        "beacon run".green(),
+        result.model_name.cyan()
     );
+
+    Ok(())
 }
 
 /// Locate the `tokenizer.json` file — either from an explicit path or by
@@ -322,22 +332,15 @@ fn cmd_run(
     top_p: Option<f32>,
     tokenizer_path: Option<&str>,
 ) -> Result<()> {
-    let model_path = Path::new(model);
-
-    if !model_path.exists() {
-        bail!(
-            "Model file not found: {}\n\n\
-             Hint: provide a path to a .gguf or .beacon file, e.g.:\n  \
-             beacon run /path/to/model.gguf \"Hello\"",
-            model_path.display()
-        );
-    }
+    // Determine whether the model argument is a file path or a model name.
+    // If it looks like a file path (.gguf/.beacon extension or file exists),
+    // load directly. Otherwise, try to resolve as a cached model name.
+    let (model_path_buf, tok_path) = resolve_model_and_tokenizer(model, tokenizer_path)?;
+    let model_path = model_path_buf.as_path();
 
     let beacon_file = load_model(model_path)?;
     print_run_header(&beacon_file, prompt, max_tokens, temperature, top_k, top_p);
 
-    // Find and load tokenizer.
-    let tok_path = find_tokenizer(model_path, tokenizer_path)?;
     eprintln!(
         "{} Loading tokenizer from {}",
         "=>".green().bold(),
@@ -576,6 +579,77 @@ fn cmd_serve(port: u16) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Resolve a model argument to a file path and a tokenizer path.
+///
+/// If `model` is a file path (has a `.gguf` or `.beacon` extension, or the
+/// file exists on disk), it is used directly. Otherwise, it is treated as a
+/// model name and looked up in the local cache at `~/.beacon/models/`.
+fn resolve_model_and_tokenizer(
+    model: &str,
+    tokenizer_override: Option<&str>,
+) -> Result<(PathBuf, PathBuf)> {
+    let as_path = Path::new(model);
+
+    // Check if it looks like a direct file path.
+    let is_file_path = as_path.exists()
+        || as_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| ext == "gguf" || ext == "beacon");
+
+    if is_file_path {
+        let tok = find_tokenizer(as_path, tokenizer_override)?;
+        return Ok((as_path.to_path_buf(), tok));
+    }
+
+    // Treat as a model name — look in the cache directory.
+    let cache_dir = default_models_dir();
+    let model_dir = cache_dir.join(model);
+
+    // Try .beacon first, then .gguf.
+    let beacon_path = model_dir.join("model.beacon");
+    let gguf_path = model_dir.join("model.gguf");
+
+    let model_path = if beacon_path.exists() {
+        beacon_path
+    } else if gguf_path.exists() {
+        gguf_path
+    } else {
+        bail!(
+            "Model '{model}' not found in cache.\n\n\
+             Hint: download it first with:\n  \
+             beacon pull {model}\n\n\
+             Or provide a path to a .gguf or .beacon file:\n  \
+             beacon run /path/to/model.gguf \"your prompt\""
+        );
+    };
+
+    // Look for tokenizer in the model directory.
+    let tok_path = if let Some(explicit) = tokenizer_override {
+        let p = PathBuf::from(explicit);
+        if p.exists() {
+            p
+        } else {
+            bail!("Tokenizer file not found: {explicit}");
+        }
+    } else {
+        let candidate = model_dir.join("tokenizer.json");
+        if candidate.exists() {
+            candidate
+        } else {
+            bail!(
+                "No tokenizer.json found for model '{}'.\n\
+                 Expected at: {}\n\
+                 Use --tokenizer /path/to/tokenizer.json to specify one.",
+                model,
+                candidate.display()
+            );
+        }
+    };
+
+    Ok((model_path, tok_path))
+}
 
 /// Default models cache directory: `~/.beacon/models/`.
 fn default_models_dir() -> PathBuf {

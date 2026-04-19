@@ -17,6 +17,7 @@ path = "src/main.rs"
 beacon-core = { path = "../beacon-core" }
 beacon-format = { path = "../beacon-format" }
 beacon-mlx = { path = "../beacon-mlx" }
+beacon-registry = { path = "../beacon-registry" }
 beacon-tokenizer = { path = "../beacon-tokenizer" }
 beacon-scheduler = { path = "../beacon-scheduler" }
 clap = { version = "4", features = ["derive"] }
