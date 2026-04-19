@@ -11,3 +11,10 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+beacon-mlx = { path = "../beacon-mlx" }
+beacon-format = { path = "../beacon-format" }
+beacon-kernels = { path = "../beacon-kernels" }
+thiserror = "2"
+memmap2 = "0.9"

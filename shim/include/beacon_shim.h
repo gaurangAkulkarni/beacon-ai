@@ -157,6 +157,22 @@ int32_t beacon_op_kv_cache_update(
     int64_t position,
     BeaconTensor** out_k_view, BeaconTensor** out_v_view);
 
+// === Tensor manipulation ===
+// Reshape a tensor to a new shape (same total element count).
+int32_t beacon_op_reshape(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* x,
+    const int64_t* new_shape, size_t new_ndim,
+    BeaconTensor** out);
+
+// Embedding lookup: select rows from a weight matrix by index.
+// weight: [vocab_size, hidden_dim], indices: [seq_len] (int32)
+// out: [seq_len, hidden_dim]
+int32_t beacon_op_embedding(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* weight, const BeaconTensor* indices,
+    BeaconTensor** out);
+
 // === Custom kernels (Metal) ===
 // Used where MLX's built-in ops are insufficient.
 // NOTE: Step 2 ships a stub; the real Q4 dequant+matmul kernel lands in Step 6 / v0.2.

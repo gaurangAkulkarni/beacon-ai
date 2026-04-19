@@ -315,4 +315,48 @@ int32_t beacon_op_kv_cache_update(
     });
 }
 
+int32_t beacon_op_reshape(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* x,
+    const int64_t* new_shape, size_t new_ndim,
+    BeaconTensor** out) {
+    return beacon::guard([&]() -> int32_t {
+        if (any_null({ctx, stream, x, out}) || new_shape == nullptr) {
+            beacon::set_error_message("beacon_op_reshape: null argument");
+            return BEACON_ERR_INVALID_ARGUMENT;
+        }
+#ifdef BEACON_NO_MLX
+        return BEACON_ERR_UNKNOWN;
+#else
+        mlx::core::Shape shape(new_ndim);
+        for (size_t i = 0; i < new_ndim; ++i) {
+            shape[i] = static_cast<int>(new_shape[i]);
+        }
+        auto result = mlx::core::reshape(x->arr, shape, stream->stream);
+        *out = box_result(std::move(result));
+        return BEACON_OK;
+#endif
+    });
+}
+
+int32_t beacon_op_embedding(
+    BeaconContext* ctx, BeaconStream* stream,
+    const BeaconTensor* weight, const BeaconTensor* indices,
+    BeaconTensor** out) {
+    return beacon::guard([&]() -> int32_t {
+        if (any_null({ctx, stream, weight, indices, out})) {
+            beacon::set_error_message("beacon_op_embedding: null argument");
+            return BEACON_ERR_INVALID_ARGUMENT;
+        }
+#ifdef BEACON_NO_MLX
+        return BEACON_ERR_UNKNOWN;
+#else
+        // take(weight, indices, axis=0) selects rows by index.
+        auto result = mlx::core::take(weight->arr, indices->arr, 0, stream->stream);
+        *out = box_result(std::move(result));
+        return BEACON_OK;
+#endif
+    });
+}
+
 }  // extern "C"

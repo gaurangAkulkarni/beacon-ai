@@ -48,6 +48,13 @@ version = "0.1.0"
 [[package]]
 name = "beacon-core"
 version = "0.1.0"
+dependencies = [
+ "beacon-format",
+ "beacon-kernels",
+ "beacon-mlx",
+ "memmap2",
+ "thiserror",
+]
 
 [[package]]
 name = "beacon-cuda"

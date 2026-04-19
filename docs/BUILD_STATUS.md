@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 7 — Transformer forward pass on MLX (`beacon-core` crate).**
+**Next up: Step 8 — Transformer forward pass on CPU (`beacon-core` crate).**
 
-Steps 1–6 complete and committed. All locally verified on macOS ARM64.
+Steps 1–7 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -291,14 +291,61 @@ Architecture reference: [§5 Backend Selection](architecture.md#5-backend-select
 
 ---
 
-### Steps 7 – 15 ⏳ not started
+### Step 7 — Transformer forward pass on MLX ✅ complete
+
+Architecture reference: [§7 Forward Pass](architecture.md#7-forward-pass-architecture),
+[§8 KV Cache](architecture.md#8-kv-cache-design).
+
+**Success criteria:**
+- [x] `ComputeBackend` trait defined matching architecture §5
+- [x] MLX backend implements all trait methods
+- [x] Weight loading from `.beacon` files via zero-copy mmap
+- [x] Transformer forward pass: embed → (attn_norm → attention → residual →
+  ffn_norm → ffn → residual → eval) × layers → final_norm → lm_head
+- [x] KV cache management (preallocated, updated per decode step)
+- [ ] Qwen 2.5 3B Q4 generates coherent text (requires real model;
+  gated behind `BEACON_TEST_MODEL` env var)
+- [ ] Logits match HF reference to 3 decimal places at T=0 (same gate)
+
+**Delivered:**
+- Shim additions: `beacon_op_reshape` (wraps `mlx::core::reshape`),
+  `beacon_op_embedding` (wraps `mlx::core::take`). Shim at **1,089 / 2,000**
+  lines (55% headroom).
+- `beacon-mlx` ops: `reshape()`, `embedding()` Rust wrappers.
+- `beacon-core/src/backend.rs` — `ComputeBackend` trait (15 methods).
+- `beacon-core/src/mlx_backend.rs` — `MlxBackend` delegating to beacon-mlx.
+- `beacon-core/src/weights.rs` — `AttentionWeights`, `FfnWeights`,
+  `LayerWeights`, `ModelWeights` + loading from `BeaconFile` with HF naming.
+- `beacon-core/src/kv_cache.rs` — `KvCache<T>` per-layer cache.
+- `beacon-core/src/engine.rs` — `Engine<B>` with `load()`, `forward()`,
+  `generate_next_token()`, `attention_block()`, `ffn_block()`.
+- `beacon-core/src/error.rs` — `EngineError` enum.
+
+**Local verification (macOS ARM64):**
+- `cargo build -p beacon-core` — clean
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-core --all-targets -- -D warnings` — clean
+- `cargo test -p beacon-core` — 3/3 passed, 1 ignored
+- `cargo build --workspace --all-targets` — clean
+- `scripts/check-shim-lines.sh` — 1,089 / 2,000
+
+**Design decisions recorded:**
+- All weight projections use `matmul` (not `quantized_matmul`) in v0.1 — GGUF
+  Q4 bytes are not in MLX's internal quantization format. The quantized path
+  requires a format bridge (v0.2).
+- Token tensor creation uses anonymous mmap to avoid disk I/O in decode path.
+- Reshape + embedding added to shim (+60 lines) rather than handled in Rust,
+  because MLX's lazy graph needs these as part of the computation graph.
+
+---
+
+### Steps 8 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 7 | Transformer forward pass on MLX | §7, §8 | not started |
 | 8 | Transformer forward pass on CPU | §5 | not started |
 | 9 | Scheduler | §11 | not started |
 | 10 | CLI | §12.3 | not started |
@@ -354,6 +401,9 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | Chat templates via `minijinja` | Jinja2-subset rendering matching HuggingFace `tokenizer_config.json` chat_template format. |
 | 2026-04-19 | Correctness-first CPU kernels: scalar reference + NEON SIMD | Non-negotiable rule #6: logit-level correctness before optimization. AVX2/AVX-512 dispatch to scalar until x86_64 benchmarking is available. |
 | 2026-04-19 | NEON Q4 matmul uses dequant-to-buffer + `vfmaq_f32` | Simpler and provably correct. Fused dequant-multiply in registers is a v0.2 optimization. |
+| 2026-04-19 | `beacon_op_reshape` + `beacon_op_embedding` added to shim | Needed for multi-head attention reshape and token embedding lookup. MLX lazy graph requires these as graph nodes, not Rust-side operations. +60 lines (1,089 / 2,000). |
+| 2026-04-19 | v0.1 uses `matmul` not `quantized_matmul` for weight projections | GGUF Q4 bytes are not in MLX's internal quantization format. The quantized path requires a format bridge between GGUF block layouts and MLX's `quantized_matmul` expectations (v0.2). |
+| 2026-04-19 | Token tensor via anonymous mmap | Avoids heap allocation and disk I/O in the decode hot path for creating I32 index tensors. |
 
 ---
 

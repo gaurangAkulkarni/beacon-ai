@@ -206,6 +206,52 @@ pub fn kv_cache_update(
     ))
 }
 
+/// Reshape a tensor to `new_shape` (total elements must be unchanged).
+pub fn reshape(
+    stream: &MlxStream,
+    x: &MlxTensor,
+    new_shape: &[i64],
+) -> Result<MlxTensor, MlxError> {
+    let ctx = Arc::clone(&x.ctx);
+    let mut out: *mut ffi::BeaconTensor = std::ptr::null_mut();
+    let status = unsafe {
+        ffi::beacon_op_reshape(
+            ctx.inner,
+            stream.inner,
+            x.inner,
+            new_shape.as_ptr(),
+            new_shape.len(),
+            &raw mut out,
+        )
+    };
+    status_to_result(status)?;
+    Ok(MlxTensor::from_raw(ctx, out))
+}
+
+/// Embedding lookup: select rows from `weight` by `indices`.
+///
+/// `weight`: `[vocab_size, hidden_dim]`, `indices`: `[seq_len]` (i32).
+/// Returns `[seq_len, hidden_dim]`.
+pub fn embedding(
+    stream: &MlxStream,
+    weight: &MlxTensor,
+    indices: &MlxTensor,
+) -> Result<MlxTensor, MlxError> {
+    let ctx = Arc::clone(&weight.ctx);
+    let mut out: *mut ffi::BeaconTensor = std::ptr::null_mut();
+    let status = unsafe {
+        ffi::beacon_op_embedding(
+            ctx.inner,
+            stream.inner,
+            weight.inner,
+            indices.inner,
+            &raw mut out,
+        )
+    };
+    status_to_result(status)?;
+    Ok(MlxTensor::from_raw(ctx, out))
+}
+
 /// Custom Metal kernel: Q4 dequant + matmul (stub in v0.1).
 pub fn kernel_q4_dequant_mul(
     stream: &MlxStream,
