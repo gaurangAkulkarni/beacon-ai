@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 6 — CPU kernels (`beacon-kernels` crate).**
+**Next up: Step 7 — Transformer forward pass on MLX (`beacon-core` crate).**
 
-Steps 1–5 complete and committed. All locally verified on macOS ARM64.
+Steps 1–6 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -249,14 +249,55 @@ Architecture reference: [§10 Tokenizer](architecture.md#10-tokenizer-beacon-tok
 
 ---
 
-### Steps 6 – 15 ⏳ not started
+### Step 6 — CPU kernels ✅ complete
+
+Architecture reference: [§5 Backend Selection](architecture.md#5-backend-selection),
+[§6.2 CPU Backend](architecture.md#62-cpu-backend).
+
+**Success criteria:**
+- [x] Q4 matmul correctness verified (scalar + NEON match)
+- [x] All ops (RMSNorm, SiLU, softmax, RoPE, add, mul) correctness tested
+- [x] NEON SIMD path active on Apple Silicon
+- [ ] Q4 matmul within 5% of llama.cpp throughput (requires benchmark with
+  real model sizes — deferred to Step 14 benchmark harness)
+
+**Delivered:**
+- `src/q4.rs` — `Q4_0` block layout (18 bytes/block, 32 elements), f16→f32
+  conversion, dequantization.
+- `src/ops.rs` — scalar reference implementations: `matmul_f32`, `q4_dot_f32`,
+  `q4_matmul_f32`, `rms_norm`, `silu_inplace`, `softmax_inplace`,
+  `rope_inplace`, `add`, `mul`.
+- `src/neon.rs` — NEON-accelerated `Q4_0` dot product and matrix-vector
+  multiply using `vfmaq_f32` FMA intrinsics (aarch64 only).
+- `src/dispatch.rs` — runtime CPU feature detection (`SimdLevel` enum:
+  Scalar/Neon/Avx2/Avx512), dispatched `q4_matmul_f32` and `q4_dot_f32`.
+- 14 correctness tests including NEON-vs-scalar cross-check.
+
+**Local verification (macOS ARM64):**
+- `cargo build -p beacon-kernels` — clean
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-kernels --all-targets -- -D warnings` — clean
+- `cargo test -p beacon-kernels` — 14/14 passed
+- `cargo build --workspace --all-targets` — clean
+
+**Design decisions recorded:**
+- Scalar implementations first, NEON optimization second — correctness before
+  performance per non-negotiable rule #6.
+- AVX2/AVX-512 paths dispatch to scalar for now; optimized implementations
+  will land when x86_64 hardware is available for benchmarking.
+- NEON implementation dequantizes to a temp `[f32; 32]` buffer then uses
+  `vfmaq_f32` for the dot product — simpler and correct; a fused
+  dequant-multiply in registers is a v0.2 optimization.
+
+---
+
+### Steps 7 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 6 | CPU kernels | §5, §6.2 | not started |
 | 7 | Transformer forward pass on MLX | §7, §8 | not started |
 | 8 | Transformer forward pass on CPU | §5 | not started |
 | 9 | Scheduler | §11 | not started |
@@ -311,6 +352,8 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | GGUF tokenizer metadata stored as JSON blob in `.beacon` header | Step 5 (tokenizer) will define the exact consumption schema. Best-effort serialisation of all `tokenizer.ggml.*` keys now. |
 | 2026-04-19 | Wrap HuggingFace `tokenizers` crate rather than reimplementing BPE | Architecture §10 prescribes this approach. Guarantees token-for-token match by construction. |
 | 2026-04-19 | Chat templates via `minijinja` | Jinja2-subset rendering matching HuggingFace `tokenizer_config.json` chat_template format. |
+| 2026-04-19 | Correctness-first CPU kernels: scalar reference + NEON SIMD | Non-negotiable rule #6: logit-level correctness before optimization. AVX2/AVX-512 dispatch to scalar until x86_64 benchmarking is available. |
+| 2026-04-19 | NEON Q4 matmul uses dequant-to-buffer + `vfmaq_f32` | Simpler and provably correct. Fused dequant-multiply in registers is a v0.2 optimization. |
 
 ---
 
