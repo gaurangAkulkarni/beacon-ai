@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use beacon_core::ComputeBackend as _;
@@ -249,6 +250,10 @@ fn print_run_header(
 }
 
 /// Run the auto-regressive generation loop, printing tokens to stdout.
+///
+/// Measures and prints timing statistics: load time (passed in), time to first
+/// token (TTFT), total generation time, and tokens per second.
+#[allow(clippy::too_many_arguments)]
 fn generate(
     engine: &mut beacon_core::Engine<beacon_core::MlxBackend>,
     tokenizer: &beacon_tokenizer::BeaconTokenizer,
@@ -257,8 +262,10 @@ fn generate(
     eos_token_ids: &[u32],
     vocab_size: usize,
     max_tokens: usize,
+    load_elapsed: std::time::Duration,
 ) -> Result<()> {
     let mut rng = rand::rng();
+    let gen_start = Instant::now();
 
     // Prefill: forward the entire prompt at once.
     let logits = engine
@@ -281,8 +288,12 @@ fn generate(
     let mut next_token =
         beacon_scheduler::sampling::sample(&mut logit_values, &prev_tokens, params, &mut rng);
 
+    let ttft = gen_start.elapsed();
+    let mut tokens_generated: usize = 1;
+
     if eos_token_ids.contains(&next_token) {
         println!();
+        print_timing_summary(tokens_generated, load_elapsed, ttft, gen_start.elapsed());
         return Ok(());
     }
 
@@ -308,6 +319,8 @@ fn generate(
         next_token =
             beacon_scheduler::sampling::sample(&mut logit_vals, &prev_tokens, params, &mut rng);
 
+        tokens_generated += 1;
+
         if eos_token_ids.contains(&next_token) {
             break;
         }
@@ -319,7 +332,44 @@ fn generate(
     }
 
     println!(); // Final newline.
+
+    let gen_elapsed = gen_start.elapsed();
+    print_timing_summary(tokens_generated, load_elapsed, ttft, gen_elapsed);
+
     Ok(())
+}
+
+/// Print a timing summary after generation completes.
+fn print_timing_summary(
+    tokens_generated: usize,
+    load_time: std::time::Duration,
+    ttft: std::time::Duration,
+    gen_time: std::time::Duration,
+) {
+    let gen_secs = gen_time.as_secs_f64();
+    #[allow(clippy::cast_precision_loss)]
+    let tok_per_sec = if gen_secs > 0.0 {
+        tokens_generated as f64 / gen_secs
+    } else {
+        0.0
+    };
+
+    eprintln!();
+    eprintln!(
+        "{}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+            .dimmed()
+    );
+    eprintln!("  Tokens generated : {tokens_generated}");
+    eprintln!("  Load time        : {:.2}s", load_time.as_secs_f64());
+    eprintln!("  Time to first    : {:.2}s", ttft.as_secs_f64());
+    eprintln!("  Generation time  : {gen_secs:.2}s");
+    eprintln!("  Tokens/sec       : {tok_per_sec:.1} tok/s");
+    eprintln!(
+        "{}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+            .dimmed()
+    );
 }
 
 /// `beacon run` — load a model and run end-to-end text generation.
@@ -339,6 +389,9 @@ fn cmd_run(
     let (model_path_buf, tok_path) = resolve_model_and_tokenizer(model, tokenizer_path)?;
     let model_path = model_path_buf.as_path();
 
+    // --- Timing: start load measurement ---
+    let load_start = Instant::now();
+
     let beacon_file = load_model(model_path)?;
     print_run_header(&beacon_file, prompt, max_tokens, temperature, top_k, top_p);
 
@@ -356,6 +409,8 @@ fn cmd_run(
     let backend = beacon_core::MlxBackend::new(Arc::clone(&ctx));
     let mut engine =
         beacon_core::Engine::load(&beacon_file, backend).context("failed to load engine")?;
+
+    let load_elapsed = load_start.elapsed();
 
     // Encode prompt.
     let token_ids = tokenizer
@@ -383,6 +438,7 @@ fn cmd_run(
         &cfg.eos_token_ids,
         cfg.vocab_size,
         max_tokens,
+        load_elapsed,
     )
 }
 

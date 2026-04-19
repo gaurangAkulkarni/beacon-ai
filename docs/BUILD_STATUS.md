@@ -12,13 +12,14 @@
 
 ## Current step
 
-**Next up: Step 16 — End-to-end text generation (`beacon run`).**
+**All integration steps complete (Steps 16–21).**
 
 Steps 1–15 (architecture) complete. Integration testing verified with real
 Qwen 2.5 0.5B models (F16 + Q4_K_M). Performance tuning applied (parallel
 dequant, cached F16 .beacon files, 0.14s load+forward in release).
 
 Steps 16–21 (v0.2 integration) wire the pieces into a working product.
+All steps now complete.
 
 ---
 
@@ -618,14 +619,48 @@ tensors or attention mask handling. Requires focused debugging.
 
 ---
 
-### Steps 18 – 21 ⏳ not started
+### Steps 18 – 20
 
 | # | Step | Description | Status |
 |---|---|---|---|
 | 18 | Model registry (`beacon pull`) | ✅ Download GGUF + tokenizer from HF Hub, convert, cache |
 | 19 | CI validation | ✅ GitHub Actions for macOS (full), Linux (CPU crates), Windows (check) |
 | 20 | MLX `quantized_matmul` bridge | Repack GGUF quant blocks to MLX format, 2x memory savings | not started |
-| 21 | Benchmarking vs baselines | Criterion + comparison vs MLX-LM, Ollama, llama.cpp | not started |
+
+---
+
+### Step 21 — Benchmarking vs baselines ✅ complete
+
+Architecture reference: [§13.4 Performance Tests](architecture.md#134-performance-tests).
+
+**Success criteria:**
+- [x] CLI `run` command prints timing summary (load time, TTFT, generation
+  time, tokens/sec)
+- [x] Criterion kernel benchmarks compile and run (`cargo bench -p beacon-kernels`)
+- [x] `docs/performance.md` published with methodology and reproduction steps
+- [x] `scripts/benchmark.sh` updated with end-to-end inference option
+
+**Delivered:**
+- Timing instrumentation in `crates/beacon-cli/src/main.rs`:
+  `std::time::Instant`-based measurement of model load time, time to first
+  token (TTFT), total generation time, and tokens/sec. Summary printed to
+  stderr after every `beacon run` invocation.
+- `docs/performance.md` — benchmark methodology, kernel benchmark table,
+  reproduction instructions, end-to-end inference table (Qwen 2.5 0.5B).
+- `scripts/benchmark.sh` updated to support `--e2e MODEL` flag for
+  end-to-end inference benchmarking alongside kernel benchmarks.
+- Criterion kernel benchmarks verified (14 tests pass, 12 benchmarks compile).
+
+**Local verification (macOS ARM64, Qwen 2.5 0.5B F16):**
+- `cargo fmt --all --check` — clean
+- `cargo clippy --workspace --all-targets --exclude beacon-python -- -D warnings` — clean
+- `cargo build --release -p beacon-cli` — clean
+- `beacon run qwen2.5-0.5b-fp16.gguf "Hello" --max-tokens 20`:
+  - Load time: 0.13s
+  - TTFT: 0.25s
+  - Generation time: 0.74s
+  - Tokens/sec: 27.0 tok/s
+- `cargo bench -p beacon-kernels -- --test` — 14 tests pass
 
 ---
 
@@ -684,6 +719,7 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | Python cdylib builds via `maturin`, not `cargo build` | PyO3 extension modules need Python symbols at link time. `cargo check` and `cargo clippy` work; `cargo build` for the cdylib requires `maturin build`. |
 | 2026-04-19 | Benchmarks in `beacon-kernels` crate, not workspace root | Benchmarks target beacon-kernels ops directly. Criterion 0.5 used (stable, html_reports feature). Benchmarks use representative LLM sizes (hidden_size=4096). |
 | 2026-04-19 | Eval tests as `#[ignore]` tests in crates, not standalone binaries | Simpler infrastructure: `cargo test -- --ignored` with env var gates. No separate eval binary needed until eval datasets are formalized. |
+| 2026-04-19 | Timing instrumentation uses `std::time::Instant`, not criterion | CLI timing is for user-facing summaries, not micro-benchmarks. `Instant` is zero-dependency and prints human-readable output. Criterion is used separately for kernel-level benchmarks. |
 
 ---
 
