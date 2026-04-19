@@ -412,6 +412,48 @@ Execute in order. Each step has concrete success criteria. Do not advance until 
 
 ---
 
+## Integration Steps (v0.2 — wiring everything together)
+
+Steps 1–15 build the architecture. Steps 16–21 wire the pieces into a working product that end users can run.
+
+**Step 16: End-to-end text generation (`beacon run`)**
+- Wire tokenizer + engine + scheduler in the CLI `run` subcommand.
+- `beacon run /path/to/model.gguf "Explain unified memory."` streams generated text to stdout.
+- Tokenize prompt → forward pass loop → sampling → detokenize → print.
+- ✅ Success: `beacon run qwen2.5-0.5b "Hello"` produces coherent multi-sentence output on macOS ARM64.
+
+**Step 17: Wire HTTP server to real engine**
+- Connect `/api/generate` and `/api/chat` to the engine + scheduler.
+- NDJSON streaming: emit one JSON object per generated token.
+- `beacon serve` loads a model and serves requests.
+- ✅ Success: Open WebUI or `curl` connects to `localhost:11434/api/generate` and receives streamed text.
+
+**Step 18: Model registry (`beacon pull`)**
+- Implement `beacon-registry` crate: download GGUF models from Hugging Face Hub.
+- `beacon pull qwen2.5-0.5b` downloads, converts to `.beacon`, and caches.
+- Progress bars via `indicatif`.
+- ✅ Success: `beacon pull qwen2.5-3b && beacon run qwen2.5-3b "Hello"` works from a fresh install.
+
+**Step 19: CI validation**
+- Verify GitHub Actions CI passes on macOS-14 (ARM64), ubuntu-latest, windows-latest.
+- Add shim build + smoke test job for macOS.
+- Add `cargo test --workspace` job (excluding beacon-python which needs maturin).
+- ✅ Success: All CI jobs green on push to main.
+
+**Step 20: MLX `quantized_matmul` bridge**
+- Repack GGUF quantized blocks into MLX's internal uint32 + scales format.
+- Use `quantized_matmul` instead of dequantizing to F16 at conversion time.
+- 2x memory savings for quantized models.
+- ✅ Success: Q4_K_M model runs with same quality but half the .beacon file size.
+
+**Step 21: Benchmarking against baselines**
+- Run Criterion benchmarks on representative model sizes.
+- Compare tok/s against MLX-LM, Ollama, llama.cpp on M-series hardware.
+- Publish results in `docs/performance.md`.
+- ✅ Success: Published, reproducible benchmark numbers via `scripts/benchmark.sh`.
+
+---
+
 ## Non-Negotiable Rules
 
 These rules are authoritative and apply to every step above. See [Section 15 of the architecture doc](docs/architecture.md#15-non-negotiables) for the full list and rationale. Summary:

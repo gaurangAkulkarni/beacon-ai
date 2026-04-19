@@ -12,11 +12,13 @@
 
 ## Current step
 
-**All 15 build steps complete.** Steps 1-15 verified on macOS ARM64.
+**Next up: Step 16 — End-to-end text generation (`beacon run`).**
 
-No further build steps remain. Integration testing with real models is the
-next milestone (gated behind `BEACON_TEST_MODEL` and `BEACON_TEST_EVAL`
-environment variables).
+Steps 1–15 (architecture) complete. Integration testing verified with real
+Qwen 2.5 0.5B models (F16 + Q4_K_M). Performance tuning applied (parallel
+dequant, cached F16 .beacon files, 0.14s load+forward in release).
+
+Steps 16–21 (v0.2 integration) wire the pieces into a working product.
 
 ---
 
@@ -581,6 +583,23 @@ Architecture reference: [§13.3 Correctness Tests](architecture.md#133-correctne
 **Local verification (macOS ARM64):**
 - `tests/eval/README.md` present with complete documentation
 - Eval test infrastructure in place (environment-gated `#[ignore]` tests)
+
+---
+
+## v0.2 Integration Steps (16–21)
+
+These steps wire the v0.1 architecture into a working product.
+
+### Steps 16 – 21 ⏳ not started
+
+| # | Step | Description | Status |
+|---|---|---|---|
+| 16 | End-to-end text generation | Wire tokenizer + engine + scheduler in `beacon run` | not started |
+| 17 | Wire HTTP server | Connect `/api/generate` + `/api/chat` to real engine with NDJSON streaming | not started |
+| 18 | Model registry (`beacon pull`) | Download GGUF from HuggingFace Hub, convert, cache | not started |
+| 19 | CI validation | Verify GitHub Actions on macOS/Linux/Windows | not started |
+| 20 | MLX `quantized_matmul` bridge | Repack GGUF quant blocks to MLX format, 2x memory savings | not started |
+| 21 | Benchmarking vs baselines | Criterion + comparison vs MLX-LM, Ollama, llama.cpp | not started |
 
 ---
 
