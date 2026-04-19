@@ -13,5 +13,16 @@ authors.workspace = true
 name = "beacon"
 path = "src/main.rs"
 
+[dependencies]
+beacon-core = { path = "../beacon-core" }
+beacon-format = { path = "../beacon-format" }
+beacon-tokenizer = { path = "../beacon-tokenizer" }
+beacon-scheduler = { path = "../beacon-scheduler" }
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
+owo-colors = "4"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+
 [lints]
 workspace = true

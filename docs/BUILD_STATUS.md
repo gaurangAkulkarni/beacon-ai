@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 10 — CLI (`beacon-cli` crate).**
+**Next up: Step 11 — HTTP server (`beacon-server` crate).**
 
-Steps 1–9 complete and committed. All locally verified on macOS ARM64.
+Steps 1–10 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -406,14 +406,46 @@ Architecture reference: [§11 Scheduler](architecture.md#11-scheduler-beacon-sch
 
 ---
 
-### Steps 10 – 15 ⏳ not started
+### Step 10 — CLI ✅ complete
+
+Architecture reference: [§12.3 CLI](architecture.md#123-cli-beacon-cli).
+
+**Success criteria:**
+- [x] `beacon --help` shows all 6 subcommands (pull, run, list, remove, info, serve)
+- [x] `beacon info <file>` loads `.gguf` / `.beacon` and prints config + tensor summary
+- [x] `beacon list` enumerates cached models
+- [x] `beacon remove <model>` deletes from cache
+- [ ] `beacon run qwen2.5-3b "Hello"` end-to-end (requires real model; structural
+  code path in place)
+
+**Delivered:**
+- `clap` derive-based CLI with 6 subcommands.
+- `run`: loads `.gguf` (auto-converts via `load_or_convert`) or `.beacon`,
+  prints config + generation params. Inference path wired but deferred to
+  real model integration testing.
+- `info`: full config display + tensor summary grouped by dtype.
+- `list`: enumerates `~/.beacon/models/`, shows name + size.
+- `remove`: deletes model directory from cache.
+- `pull`: placeholder (beacon-registry not yet built).
+- `serve`: placeholder for Step 11.
+- Dependencies: `clap` (derive), `indicatif`, `owo-colors`, `tokio`, `anyhow`,
+  plus `beacon-core`, `beacon-format`, `beacon-tokenizer`, `beacon-scheduler`.
+
+**Local verification (macOS ARM64):**
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-cli --all-targets -- -D warnings` — clean
+- `cargo run -p beacon-cli -- --help` — shows all subcommands
+- `cargo build --workspace --all-targets` — clean
+
+---
+
+### Steps 11 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 10 | CLI | §12.3 | not started |
 | 11 | HTTP server | §12.4 | not started |
 | 12 | Python bindings | §12.1 | not started |
 | 13 | Node bindings | §12.2 | not started |
