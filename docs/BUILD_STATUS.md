@@ -12,9 +12,9 @@
 
 ## Current step
 
-**Next up: Step 11 — HTTP server (`beacon-server` crate).**
+**Next up: Step 12 — Python bindings (`bindings/python`).**
 
-Steps 1–10 complete and committed. All locally verified on macOS ARM64.
+Steps 1–11 complete and committed. All locally verified on macOS ARM64.
 
 ---
 
@@ -439,14 +439,43 @@ Architecture reference: [§12.3 CLI](architecture.md#123-cli-beacon-cli).
 
 ---
 
-### Steps 11 – 15 ⏳ not started
+### Step 11 — HTTP server ✅ complete
+
+Architecture reference: [§12.4 HTTP Server](architecture.md#124-http-server-beacon-server).
+
+**Success criteria:**
+- [x] Axum-based server with Ollama-compatible endpoints
+- [x] `/api/generate`, `/api/chat`, `/api/tags`, `/api/pull` routes
+- [x] CORS middleware (permissive, matching Ollama behaviour)
+- [x] `GET /api/tags` enumerates cached models
+- [ ] NDJSON streaming (structural TODO; will wire scheduler in integration)
+- [ ] Open WebUI compatibility (requires real model serving)
+
+**Delivered:**
+- `server/beacon-server/` crate added to workspace.
+- Ollama-compatible JSON types (`GenerateRequest`, `ChatRequest`,
+  `TagsResponse`, `PullRequest`, etc.).
+- Four route handlers returning proper Ollama-format JSON.
+- `GET /api/tags` reads actual `~/.beacon/models/` directory.
+- CORS middleware via `tower-http`.
+- Server binary listening on `0.0.0.0:11434` (configurable via `BEACON_PORT`).
+- Dependencies: `axum`, `tokio`, `serde`, `serde_json`, `tower-http`,
+  `thiserror`, `dirs`.
+
+**Local verification (macOS ARM64):**
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p beacon-server --all-targets -- -D warnings` — clean
+- `cargo build --workspace --all-targets` — clean
+
+---
+
+### Steps 12 – 15 ⏳ not started
 
 See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
 for the authoritative list. Summary:
 
 | # | Step | Architecture § | Status |
 |---|---|---|---|
-| 11 | HTTP server | §12.4 | not started |
 | 12 | Python bindings | §12.1 | not started |
 | 13 | Node bindings | §12.2 | not started |
 | 14 | Benchmark harness | §13.4 | not started |

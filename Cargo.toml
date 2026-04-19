@@ -11,6 +11,7 @@ members = [
     "crates/beacon-arrow",
     "crates/beacon-registry",
     "crates/beacon-cli",
+    "server/beacon-server",
 ]
 
 [workspace.package]
