@@ -32,7 +32,7 @@ jobs:
         run: brew install cmake ninja
 
       - name: Ensure Metal Toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
+        run: xcodebuild -downloadComponent MetalToolchain || true
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

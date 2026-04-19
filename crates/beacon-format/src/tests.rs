@@ -143,12 +143,13 @@ fn parse_synthetic_gguf() {
 
     // Check tensor metadata.
     assert_eq!(gguf.tensors[0].name, "weight_a");
-    assert_eq!(gguf.tensors[0].shape, vec![2, 3]);
+    // GGUF dims [2,3] reversed to row-major [3,2] by the parser.
+    assert_eq!(gguf.tensors[0].shape, vec![3, 2]);
     assert_eq!(gguf.tensors[0].dtype, BeaconDtype::F32);
     assert_eq!(gguf.tensors[0].data_length, 24); // 6 * 4
 
     assert_eq!(gguf.tensors[1].name, "weight_b");
-    assert_eq!(gguf.tensors[1].shape, vec![3, 2]);
+    assert_eq!(gguf.tensors[1].shape, vec![2, 3]);
     assert_eq!(gguf.tensors[1].dtype, BeaconDtype::F32);
     assert_eq!(gguf.tensors[1].data_length, 24);
 
