@@ -1,0 +1,5 @@
+add_executable(beacon_shim_smoke smoke.c)
+target_link_libraries(beacon_shim_smoke PRIVATE beacon_shim)
+target_compile_features(beacon_shim_smoke PRIVATE c_std_11)
+
+add_test(NAME beacon_shim_smoke COMMAND beacon_shim_smoke)

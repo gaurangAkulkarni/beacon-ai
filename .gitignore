@@ -1,6 +1,12 @@
 /target
 **/*.rs.bk
 
+# CMake / shim build artifacts
+shim/build/
+**/CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
 # IDE
 .idea/
 .vscode/

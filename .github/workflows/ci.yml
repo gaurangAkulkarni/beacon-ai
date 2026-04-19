@@ -56,3 +56,43 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  shim:
+    name: shim (macos-14)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install cmake ninja
+
+      - name: Ensure Metal Toolchain is present
+        # Idempotent: no-op if already installed on the runner. Required for
+        # MLX's Metal backend (the primary MLX path) since Xcode 26 decoupled
+        # the toolchain from the default install.
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Enforce 2,000-line cap (non-negotiable §1)
+        run: scripts/check-shim-lines.sh
+
+      - name: Configure shim (Metal enabled)
+        run: cmake -S shim -B shim/build -GNinja -DBEACON_SHIM_ENABLE_METAL=ON
+
+      - name: Build shim
+        run: cmake --build shim/build
+
+      - name: Run smoke test
+        run: ctest --test-dir shim/build --output-on-failure
+
+  shim-lines:
+    name: shim line-count (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (no submodules)
+        uses: actions/checkout@v4
+
+      - name: Enforce 2,000-line cap (non-negotiable §1)
+        run: scripts/check-shim-lines.sh

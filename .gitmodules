@@ -1,0 +1,3 @@
+[submodule "shim/third_party/mlx"]
+	path = shim/third_party/mlx
+	url = https://github.com/ml-explore/mlx.git
