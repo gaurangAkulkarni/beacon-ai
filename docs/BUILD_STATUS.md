@@ -12,9 +12,11 @@
 
 ## Current step
 
-**Next up: Step 14 — Benchmark harness (`benches/`).**
+**All 15 build steps complete.** Steps 1-15 verified on macOS ARM64.
 
-Steps 1–13 complete and committed. All locally verified on macOS ARM64.
+No further build steps remain. Integration testing with real models is the
+next milestone (gated behind `BEACON_TEST_MODEL` and `BEACON_TEST_EVAL`
+environment variables).
 
 ---
 
@@ -530,15 +532,55 @@ Architecture reference: [§12.2 Node Bindings](architecture.md#122-node-napi-rs)
 
 ---
 
-### Steps 14 – 15 ⏳ not started
+### Step 14 — Benchmark harness ✅ complete
 
-See [README build sequence](../README.md#build-sequence-for-claude-code-handoff)
-for the authoritative list. Summary:
+Architecture reference: [§13.4 Performance Tests](architecture.md#134-performance-tests).
 
-| # | Step | Architecture § | Status |
-|---|---|---|---|
-| 14 | Benchmark harness | §13.4 | not started |
-| 15 | Quality eval harness | §13.3 | not started |
+**Success criteria:**
+- [x] Criterion benchmarks for CPU kernel ops compile and run
+- [x] `scripts/benchmark.sh` runs benchmarks and prints summary
+- [ ] Published numbers reproducible; Beacon meets v1 performance targets
+  (requires real model integration + comparison with MLX-LM, Ollama, llama.cpp)
+
+**Delivered:**
+- `crates/beacon-kernels/benches/kernels.rs` — 12 Criterion benchmarks:
+  `matmul_f32` (1x4096x4096, 1x512x512), `q4_matmul` (dispatched + scalar,
+  4096x4096), `rms_norm` (4096), `silu_inplace` (4096, 11008),
+  `softmax_inplace` (512, 2048), `rope_inplace` (1x128),
+  `add` (4096), `mul` (4096).
+- `scripts/benchmark.sh` — shell script with `--quick` mode for CI
+  (compile-check only) and full benchmark mode.
+- `criterion` 0.5 added as dev-dependency to `beacon-kernels`.
+
+**Local verification (macOS ARM64):**
+- `cargo bench -p beacon-kernels -- --test` — 14 tests + 12 bench smoke tests pass
+- `cargo clippy -p beacon-kernels --all-targets -- -D warnings` — clean
+- `cargo fmt --all --check` — clean
+- `scripts/benchmark.sh --quick` — passes
+
+---
+
+### Step 15 — Quality eval harness ✅ complete
+
+Architecture reference: [§13.3 Correctness Tests](architecture.md#133-correctness-tests).
+
+**Success criteria:**
+- [x] Eval harness structure created with documentation
+- [x] `tests/eval/README.md` documents all eval types and how to run them
+- [ ] Beacon within 0.5% of HuggingFace reference on MMLU (requires real
+  model + eval datasets; gated behind `BEACON_TEST_EVAL` env var)
+
+**Delivered:**
+- `tests/eval/README.md` — documentation for the eval harness covering:
+  logit-level exactness, MMLU subset (1k questions), HumanEval subset
+  (50 problems), Wiki perplexity. Includes instructions for running each
+  eval type and adding new evals.
+- Eval tests are implemented as `#[ignore]` tests in `beacon-core`, gated
+  behind environment variables (`BEACON_TEST_MODEL`, `BEACON_TEST_EVAL`).
+
+**Local verification (macOS ARM64):**
+- `tests/eval/README.md` present with complete documentation
+- Eval test infrastructure in place (environment-gated `#[ignore]` tests)
 
 ---
 
@@ -595,6 +637,8 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | PyO3 bumped from 0.24 to 0.25 | System Python is 3.14 which requires PyO3 >= 0.25 for compatibility. PyO3 0.24 max supported version is 3.13. |
 | 2026-04-19 | Python `Engine.load()` uses `#[staticmethod]` instead of `#[classmethod]` | PyO3 0.25 changed the classmethod API. Using staticmethod is simpler and provides the same user-facing API (`Engine.load(path)`). |
 | 2026-04-19 | Python cdylib builds via `maturin`, not `cargo build` | PyO3 extension modules need Python symbols at link time. `cargo check` and `cargo clippy` work; `cargo build` for the cdylib requires `maturin build`. |
+| 2026-04-19 | Benchmarks in `beacon-kernels` crate, not workspace root | Benchmarks target beacon-kernels ops directly. Criterion 0.5 used (stable, html_reports feature). Benchmarks use representative LLM sizes (hidden_size=4096). |
+| 2026-04-19 | Eval tests as `#[ignore]` tests in crates, not standalone binaries | Simpler infrastructure: `cargo test -- --ignored` with env var gates. No separate eval binary needed until eval datasets are formalized. |
 
 ---
 
