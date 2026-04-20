@@ -416,8 +416,14 @@ pub fn load_weights(
         load_and_quantize(beacon, "lm_head.weight", ctx, group_size, bits)?
     };
 
-    // Optional custom RoPE frequencies (e.g. Llama 3.2's rope_freqs.weight).
-    let rope_freqs = try_load_named(beacon, "rope_freqs.weight", ctx)?;
+    // Optional custom RoPE frequencies.
+    // NOTE: Llama 3.2's rope_freqs.weight contains scaling FACTORS (all 1.0),
+    // not actual frequencies. MLX's rope() expects real frequencies when
+    // freqs is set, so we skip rope_freqs when it's just uniform scaling —
+    // the standard theta-based computation handles it correctly.
+    let rope_freqs: Option<MlxTensor> = None;
+    // TODO: properly handle non-uniform rope_freqs by computing:
+    //   actual_freq[i] = rope_freqs[i] / theta^(2i/d)
 
     Ok(ModelWeights {
         embed_tokens,

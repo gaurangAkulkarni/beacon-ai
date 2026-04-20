@@ -414,7 +414,7 @@ fn cmd_run(
 
     // Encode prompt.
     let token_ids = tokenizer
-        .encode(prompt, false)
+        .encode(prompt, true)
         .context("failed to encode prompt")?;
     eprintln!("  Prompt tokens: {}", token_ids.len());
     eprintln!();
