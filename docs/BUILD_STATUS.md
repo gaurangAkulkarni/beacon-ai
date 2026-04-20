@@ -12,14 +12,29 @@
 
 ## Current step
 
-**All integration steps complete (Steps 16–21).**
+**All 21 build steps complete. Multi-model testing in progress.**
 
-Steps 1–15 (architecture) complete. Integration testing verified with real
-Qwen 2.5 0.5B models (F16 + Q4_K_M). Performance tuning applied (parallel
-dequant, cached F16 .beacon files, 0.14s load+forward in release).
+Steps 1–15 (architecture) + Steps 16–21 (v0.2 integration) all complete.
+End-to-end inference working for Qwen 2.5 family (F16 + Q4_K_M).
+Llama 3.2 and Gemma 4 support partially working — see model compatibility
+table below.
 
-Steps 16–21 (v0.2 integration) wire the pieces into a working product.
-All steps now complete.
+### Model Compatibility
+
+| Model | Format | Quality | tok/s | Notes |
+|---|---|---|---|---|
+| Qwen 2.5 0.5B | F16 | ✅ Excellent | 37.5 | Production-ready |
+| Qwen 2.5 0.5B | Q4_K_M | ✅ Good | 27+ | Working via gguflib dequant |
+| Qwen 2.5 1.5B | F16 | ✅ Excellent | 11.4 | Production-ready |
+| Qwen 2.5 1.5B | Q4_K_M | ❌ Garbled | 10.6 | Dequant→quantize precision loss |
+| Llama 3.2 1B | F16 | ⚠️ Semi-coherent | 11.9 | Needs chat template formatting |
+| Llama 3.2 1B | Q4_K_M | ⚠️ Semi-coherent | 30.0 | Same + dequant |
+| Gemma 4 E4B | Q4_K_M | ❌ Architecture | — | Needs MoE forward pass |
+
+### Next priorities
+1. Llama: proper instruct chat template formatting
+2. Q4_K_M at scale: investigate dequant→quantize precision for >0.5B models
+3. Gemma 4: MoE architecture (Q/K norms, gating, post-norms)
 
 ---
 
@@ -625,7 +640,20 @@ tensors or attention mask handling. Requires focused debugging.
 |---|---|---|---|
 | 18 | Model registry (`beacon pull`) | ✅ Download GGUF + tokenizer from HF Hub, convert, cache |
 | 19 | CI validation | ✅ GitHub Actions for macOS (full), Linux (CPU crates), Windows (check) |
-| 20 | MLX `quantized_matmul` bridge | Repack GGUF quant blocks to MLX format, 2x memory savings | not started |
+| 20 | MLX `quantized_matmul` bridge | ✅ `beacon_op_quantize` + `beacon_op_dequantize_gguf` + `ProjectionWeight` enum |
+
+**Step 20 details:**
+- Added `beacon_op_quantize` (wraps `mlx::core::quantize`) and
+  `beacon_op_dequantize_gguf` (wraps gguflib C dequantizer) to shim.
+- `ProjectionWeight<T>` enum: `Plain(T)` or `Quantized { packed, scales, biases }`.
+- Engine `proj_matmul` dispatches: Plain → transpose + matmul, Quantized → quantized_matmul.
+- F16 weights re-quantized via MLX's `quantize()` at load time for `quantized_matmul`.
+- Quantized GGUF weights dequantized via gguflib (battle-tested) then re-quantized.
+- Fixed Q5_0 dequant (lo/hi nibbles to separate halves, not interleaved).
+- Fixed Q4_K dequant (pairs of sub-blocks share 32 bytes).
+- Qwen 0.5B Q4_K_M produces coherent text. Larger models have precision loss.
+- Custom RoPE frequencies wired (for Llama 3.2's rope_freqs.weight).
+- Gemma 3/4 architecture mapping added. Auto-detect tied embeddings.
 
 ---
 
@@ -720,6 +748,10 @@ ctest --test-dir shim/build --output-on-failure
 | 2026-04-19 | Benchmarks in `beacon-kernels` crate, not workspace root | Benchmarks target beacon-kernels ops directly. Criterion 0.5 used (stable, html_reports feature). Benchmarks use representative LLM sizes (hidden_size=4096). |
 | 2026-04-19 | Eval tests as `#[ignore]` tests in crates, not standalone binaries | Simpler infrastructure: `cargo test -- --ignored` with env var gates. No separate eval binary needed until eval datasets are formalized. |
 | 2026-04-19 | Timing instrumentation uses `std::time::Instant`, not criterion | CLI timing is for user-facing summaries, not micro-benchmarks. `Instant` is zero-dependency and prints human-readable output. Criterion is used separately for kernel-level benchmarks. |
+| 2026-04-20 | GGUF dequant via gguflib C code, not Rust | Rust K-quant dequant had bugs (Q4_K interleaving, Q5_0 nibble ordering). gguflib's C dequant is battle-tested. Added `beacon_op_dequantize_gguf` to shim. |
+| 2026-04-20 | `ProjectionWeight` enum (Plain vs Quantized) | Forward pass dispatches between `transpose+matmul` and `quantized_matmul` based on weight type. F16 weights re-quantized via MLX at load time. |
+| 2026-04-20 | Skip Llama 3.2 `rope_freqs.weight` (all 1.0 scaling factors) | MLX RoPE expects actual frequencies, not scaling multipliers. All-1.0 factors mean standard theta computation is correct. |
+| 2026-04-20 | Gemma 4 needs dedicated MoE forward pass | Q/K norms, input gating, post-attention/FFN norms, layer output scaling — too different from Llama-family template. Tracked as future work. |
 
 ---
 
