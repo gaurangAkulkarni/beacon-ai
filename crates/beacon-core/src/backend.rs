@@ -50,6 +50,10 @@ pub trait ComputeBackend {
     ) -> Result<Self::Tensor, EngineError>;
 
     /// Rotary position embedding.
+    ///
+    /// `freqs` is an optional tensor of custom `RoPE` frequencies (e.g.
+    /// `rope_freqs.weight` from Llama 3.2). When `None`, standard frequencies
+    /// derived from `theta` are used.
     fn rope(
         &self,
         stream: &Self::Stream,
@@ -57,6 +61,7 @@ pub trait ComputeBackend {
         position_offset: i32,
         theta: f32,
         dim: i32,
+        freqs: Option<&Self::Tensor>,
     ) -> Result<Self::Tensor, EngineError>;
 
     /// Fused scaled dot-product attention with GQA support.

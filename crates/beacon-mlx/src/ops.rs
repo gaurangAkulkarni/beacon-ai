@@ -155,14 +155,20 @@ pub fn rms_norm(
 }
 
 /// Rotary position embedding.
+///
+/// `freqs` is an optional tensor of custom `RoPE` frequencies (e.g.
+/// `rope_freqs.weight` from Llama 3.2). When `None`, standard frequencies
+/// derived from `theta` are used.
 pub fn rope(
     stream: &MlxStream,
     x: &MlxTensor,
     position_offset: i32,
     theta: f32,
     dim: i32,
+    freqs: Option<&MlxTensor>,
 ) -> Result<MlxTensor, MlxError> {
     let ctx = Arc::clone(&x.ctx);
+    let freqs_ptr = freqs.map_or(std::ptr::null(), |f| f.inner.cast_const());
     let mut out: *mut ffi::BeaconTensor = std::ptr::null_mut();
     let status = unsafe {
         ffi::beacon_op_rope(
@@ -172,6 +178,7 @@ pub fn rope(
             position_offset,
             theta,
             dim,
+            freqs_ptr,
             &raw mut out,
         )
     };

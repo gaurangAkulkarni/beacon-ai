@@ -119,6 +119,7 @@ int32_t beacon_op_rope(
     BeaconContext* ctx, BeaconStream* stream,
     const BeaconTensor* x,
     int32_t position_offset, float theta, int32_t dim,
+    const BeaconTensor* freqs,
     BeaconTensor** out) {
     return beacon::guard([&]() -> int32_t {
         if (any_null({ctx, stream, x, out})) {
@@ -128,14 +129,24 @@ int32_t beacon_op_rope(
 #ifdef BEACON_NO_MLX
         return BEACON_ERR_UNKNOWN;
 #else
+        // MLX's rope requires exactly one of `base` or `freqs` — not both.
+        // When custom frequencies are provided, we pass nullopt for base.
+        std::optional<mlx::core::array> freqs_arr;
+        std::optional<float> base_opt;
+        if (freqs != nullptr) {
+            freqs_arr = freqs->arr;
+            // base must be nullopt when freqs is set
+        } else {
+            base_opt = theta;
+        }
         auto result = mlx::core::fast::rope(
             x->arr,
             /*dims=*/dim,
             /*traditional=*/false,
-            /*base=*/std::optional<float>{theta},
+            /*base=*/base_opt,
             /*scale=*/1.0f,
             /*offset=*/position_offset,
-            /*freqs=*/std::nullopt,
+            freqs_arr,
             stream->stream);
         *out = box_result(std::move(result));
         return BEACON_OK;

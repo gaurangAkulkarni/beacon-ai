@@ -83,6 +83,8 @@ pub struct ModelWeights {
     pub final_norm: MlxTensor,
     /// Language model head (output projection).
     pub lm_head: ProjectionWeight<MlxTensor>,
+    /// Optional custom `RoPE` frequencies (e.g. Llama 3.2's `rope_freqs.weight`).
+    pub rope_freqs: Option<MlxTensor>,
 }
 
 /// Convert a `BeaconDtype` to the MLX `Dtype`.
@@ -131,6 +133,7 @@ fn hf_to_gguf_name(hf_name: &str) -> String {
         "model.embed_tokens.weight" => return "token_embd.weight".to_owned(),
         "model.norm.weight" => return "output_norm.weight".to_owned(),
         "lm_head.weight" => return "output.weight".to_owned(),
+        "rope_freqs.weight" => return "rope_freqs.weight".to_owned(),
         _ => {}
     }
 
@@ -413,10 +416,14 @@ pub fn load_weights(
         load_and_quantize(beacon, "lm_head.weight", ctx, group_size, bits)?
     };
 
+    // Optional custom RoPE frequencies (e.g. Llama 3.2's rope_freqs.weight).
+    let rope_freqs = try_load_named(beacon, "rope_freqs.weight", ctx)?;
+
     Ok(ModelWeights {
         embed_tokens,
         layers,
         final_norm,
         lm_head,
+        rope_freqs,
     })
 }

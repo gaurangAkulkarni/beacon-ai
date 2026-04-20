@@ -79,8 +79,10 @@ impl ComputeBackend for MlxBackend {
         position_offset: i32,
         theta: f32,
         dim: i32,
+        freqs: Option<&Self::Tensor>,
     ) -> Result<Self::Tensor, EngineError> {
-        beacon_mlx::ops::rope(stream, x, position_offset, theta, dim).map_err(EngineError::from)
+        beacon_mlx::ops::rope(stream, x, position_offset, theta, dim, freqs)
+            .map_err(EngineError::from)
     }
 
     fn attention(

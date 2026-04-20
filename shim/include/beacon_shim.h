@@ -110,6 +110,7 @@ int32_t beacon_op_rope(
     BeaconContext* ctx, BeaconStream* stream,
     const BeaconTensor* x,
     int32_t position_offset, float theta, int32_t dim,
+    const BeaconTensor* freqs,  // nullable — custom RoPE frequencies
     BeaconTensor** out);
 
 int32_t beacon_op_silu(

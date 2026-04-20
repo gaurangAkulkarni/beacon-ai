@@ -145,7 +145,10 @@ impl ComputeBackend for CpuBackend {
         position_offset: i32,
         theta: f32,
         rope_dim: i32,
+        _freqs: Option<&Self::Tensor>,
     ) -> Result<Self::Tensor, EngineError> {
+        // TODO: honour custom freqs (rope_freqs.weight) on the CPU backend.
+        // For now we ignore them and always derive frequencies from theta.
         // x may be [batch, heads, seq, head_dim] or [seq, dim].
         // RoPE applies to the last two dimensions: seq_len rows of `dim` width.
         let dim_u = rope_dim as usize;

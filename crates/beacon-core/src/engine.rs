@@ -29,6 +29,8 @@ pub struct Engine<B: ComputeBackend> {
     layers: Vec<LayerWeights<B::Tensor>>,
     final_norm: B::Tensor,
     lm_head: ProjectionWeight<B::Tensor>,
+    /// Optional custom `RoPE` frequencies (e.g. Llama 3.2's `rope_freqs.weight`).
+    rope_freqs: Option<B::Tensor>,
     cache: Vec<KvCache<B::Tensor>>,
 }
 
@@ -68,6 +70,7 @@ impl Engine<MlxBackend> {
             layers: weights.layers,
             final_norm: weights.final_norm,
             lm_head: weights.lm_head, // already a ProjectionWeight
+            rope_freqs: weights.rope_freqs,
             cache,
         })
     }
@@ -123,6 +126,7 @@ impl Engine<CpuBackend> {
             layers,
             final_norm,
             lm_head,
+            rope_freqs: None,
             cache,
         })
     }
@@ -347,6 +351,7 @@ impl<B: ComputeBackend> Engine<B> {
             position as i32,
             cfg.rope_theta,
             cfg.head_dim as i32,
+            self.rope_freqs.as_ref(),
         )?;
         let k = self.backend.rope(
             stream,
@@ -354,6 +359,7 @@ impl<B: ComputeBackend> Engine<B> {
             position as i32,
             cfg.rope_theta,
             cfg.head_dim as i32,
+            self.rope_freqs.as_ref(),
         )?;
 
         // Context overflow check.
