@@ -403,7 +403,9 @@ pub fn load_weights(
     // we load it again from the same mmap offset — this is zero-copy, just
     // a new handle. Tied embeddings are kept plain (not quantized) because
     // the embedding table must also work with the `embedding` op.
-    let lm_head = if tie_word_embeddings {
+    // When `tie_word_embeddings` is true or the output weight is missing,
+    // reuse the embedding table for lm_head.
+    let lm_head = if tie_word_embeddings || find_tensor(beacon, "lm_head.weight").is_err() {
         let meta = find_tensor(beacon, "model.embed_tokens.weight")?;
         let tensor = load_tensor(beacon, meta, ctx)?;
         ProjectionWeight::Plain(tensor)

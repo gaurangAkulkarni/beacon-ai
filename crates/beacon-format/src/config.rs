@@ -20,7 +20,7 @@ impl Architecture {
             "llama" => Some(Self::Llama),
             "qwen2" | "qwen" => Some(Self::Qwen),
             "phi3" | "phi" => Some(Self::Phi),
-            "gemma" | "gemma2" => Some(Self::Gemma),
+            "gemma" | "gemma2" | "gemma3" | "gemma4" => Some(Self::Gemma),
             _ => None,
         }
     }
